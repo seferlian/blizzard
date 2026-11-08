@@ -1,0 +1,30 @@
+package com.blizzard.weather;
+
+import net.minecraft.world.World;
+import net.minecraft.world.storage.WorldInfo;
+import net.minecraftforge.event.world.WorldEvent;
+import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
+
+public class BlizzardSaveHandler {
+
+    @SubscribeEvent
+    public void onWorldSave(WorldEvent.Save event) {
+        World world = event.getWorld();
+
+        if (world == null || world.isRemote) return;
+        System.out.println("[BlizzardSaveHandler] onWorldSave: isBlizzard="
+                + BlizzardReflection.isBlizzard(world)
+                + " info=" + BlizzardReflection.isBlizzardInfo(world.getWorldInfo()));
+        if (BlizzardReflection.isBlizzard(world)) {
+            WorldInfo info = world.getWorldInfo();
+            BlizzardReflection.setBlizzardInfo(info, true);
+            BlizzardReflection.setBlizzardTimeInfo(info, BlizzardReflection.getBlizzardTime(world));
+            BlizzardReflection.setBlizzardStrengthInfo(info, BlizzardReflection.getBlizzardStrength(world));
+        } else {
+            WorldInfo info = world.getWorldInfo();
+            BlizzardReflection.setBlizzardInfo(info, false);
+            BlizzardReflection.setBlizzardTimeInfo(info, 0);
+            BlizzardReflection.setBlizzardStrengthInfo(info, 0.0F);
+        }
+    }
+}
