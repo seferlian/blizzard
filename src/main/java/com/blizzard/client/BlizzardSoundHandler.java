@@ -1,5 +1,6 @@
 package com.blizzard.client;
 
+import com.blizzard.raycast.BlizzardClientExposure;
 import com.blizzard.weather.BlizzardReflection;
 import net.minecraft.client.Minecraft;
 import net.minecraft.util.SoundEvent;
@@ -37,6 +38,9 @@ public class BlizzardSoundHandler {
      * чтобы файл не «орал» — 0.7 обычно достаточно для эмбиента.
      */
     private static final float MAX_VOLUME = 0.7F;
+
+    /** Доля громкости, остающаяся в полном укрытии (0 — тишина, 1 — как на поле). */
+    private static final float SOUND_SHELTER_FLOOR = 0.05f;
 
     /**
      * Зарегистрированный SoundEvent метели.
@@ -91,7 +95,14 @@ public class BlizzardSoundHandler {
         if (normalized > 1.0F) normalized = 1.0F;
 
         // Кубическая кривая: тихо на малых strength, громко на больших.
-        float targetVolume = normalized * normalized * normalized * MAX_VOLUME;
+        float baseVolume = normalized * normalized * normalized * MAX_VOLUME;
+
+        // Учёт укрытия: в пещере остаётся SOUND_SHELTER_FLOOR от полной громкости,
+        // на открытом месте — полная. Умножаем на baseVolume, чтобы при затухании
+        // метели (baseVolume → 0) звук всё равно уходил в тишину.
+        float exposure = BlizzardClientExposure.getExposure();
+        float targetVolume = baseVolume
+                * (SOUND_SHELTER_FLOOR + (1f - SOUND_SHELTER_FLOOR) * exposure);
 
         // Эмбиента ещё нет — создаём, если громкость должна быть > 0
         if (ambient == null) {

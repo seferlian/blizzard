@@ -1,5 +1,6 @@
 package com.blizzard.client;
 
+import com.blizzard.raycast.BlizzardClientExposure;
 import com.blizzard.weather.BlizzardReflection;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BufferBuilder;
@@ -74,6 +75,9 @@ public class BlizzardShader {
 
     /** Смещение неба к серому (0..1). 0 — цвет как есть, 1 — средний серый. */
     public static float SKY_GRAY = 0.4f;
+
+    /** Доля силы тумана, остающаяся в полном укрытии (0 — ничего, 1 — как на поле). */
+    private static final float FOG_SHELTER_FLOOR = 0.2f;
 
     /** Цвет тумана (белый). */
     private static final float FOG_R = 1.0f;
@@ -492,9 +496,15 @@ public class BlizzardShader {
         setUniform1f(shaderProgram, "skyDesaturate", SKY_DESATURATE);
         setUniform1f(shaderProgram, "skyGray", SKY_GRAY);
 
+        // Сила тумана с учётом укрытия: в пещере остаётся FOG_SHELTER_FLOOR
+        // от полной силы, на открытом месте — полная.
+        float exposure = BlizzardClientExposure.getExposure();
+        float fogStrength = blizzardStrength
+                * (FOG_SHELTER_FLOOR + (1f - FOG_SHELTER_FLOOR) * exposure);
+
         // Динамический туман: при strength=0 — 60 блоков, при strength=1 — 6 блоков
-        float dynamicFogStart = 3.0f - (3.0f - 0.5f) * blizzardStrength;
-        float dynamicFogEnd   = 60.0f - (60.0f - 6.0f) * blizzardStrength;
+        float dynamicFogStart = 3.0f - (3.0f - 0.5f) * fogStrength;
+        float dynamicFogEnd   = 60.0f - (60.0f - 6.0f) * fogStrength;
         setUniform1f(shaderProgram, "fogStart", dynamicFogStart);
         setUniform1f(shaderProgram, "fogEnd", dynamicFogEnd);
         setUniform1f(shaderProgram, "fogCurve", FOG_CURVE);

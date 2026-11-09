@@ -2,6 +2,7 @@ package com.blizzard;
 
 import com.blizzard.client.BlizzardSoundHandler;
 import com.blizzard.command.CommandWeatherExtended;
+import com.blizzard.raycast.BlizzardClientExposure;
 import com.blizzard.weather.BlizzardManager;
 import com.blizzard.weather.BlizzardPlayerHandler;
 import net.minecraft.util.ResourceLocation;
@@ -42,6 +43,7 @@ public class Main {
             MinecraftForge.EVENT_BUS.register(new com.blizzard.client.BlizzardShader());
             MinecraftForge.EVENT_BUS.register(new BlizzardSoundHandler());
             BlizzardSoundHandler.setSound(BLIZZARD_WIND);
+            MinecraftForge.EVENT_BUS.register(new BlizzardClientExposure());
         }
 
     }

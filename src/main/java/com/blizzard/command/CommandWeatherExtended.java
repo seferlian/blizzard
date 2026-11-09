@@ -96,7 +96,7 @@ public class CommandWeatherExtended extends CommandBase {
                 // Метели нет — сбрасываем на всякий случай
                 BlizzardReflection.setBlizzard(world, false, 0);
                 BlizzardReflection.setBlizzardStrength(world, 0.0F);
-                BlizzardManager.NETWORK.sendToAll(new PacketBlizzard(false, 0, 0.0F));
+                BlizzardManager.NETWORK.sendToAll(new PacketBlizzard(false, 0, 0.0F, 1f, 1f));
                 BlizzardReflection.setBlizzardInfo(world.getWorldInfo(), false);
             }
         }

@@ -1,7 +1,11 @@
 package com.blizzard.weather;
 
+import com.blizzard.raycast.BlizzardExposure;
+import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.world.World;
+import net.minecraft.world.WorldServer;
 import net.minecraft.world.storage.WorldInfo;
 
 import java.util.Collections;
@@ -67,6 +71,34 @@ public class BlizzardHooks {
 
     /** Шаг затухания силы за тик. */
     private static final float FADE_DELTA = 1.0F / FADE_TICKS;
+
+    // ==================== Отладка ====================
+
+    /** Включить отладочные сообщения в чат. */
+    private static final boolean DEBUG_CHAT = false;
+
+    /** Интервал отладочных сообщений в тиках (20 = раз в секунду). */
+    private static final int DEBUG_INTERVAL = 20;
+
+    /** Последний тик, когда отправляли отладку (по игроку). */
+    private static final java.util.Map<java.util.UUID, Long> LAST_DEBUG =
+            new java.util.HashMap<>();
+
+    /** Отправляет игроку в чат проценты открытости. */
+    private static void sendDebugToChat(net.minecraft.entity.player.EntityPlayerMP p,
+                                        float sky, float open, int time, float strength) {
+        if (!DEBUG_CHAT) return;
+        long now = p.world.getTotalWorldTime();
+        Long last = LAST_DEBUG.get(p.getUniqueID());
+        if (last != null && now - last < DEBUG_INTERVAL) return;
+        LAST_DEBUG.put(p.getUniqueID(), now);
+
+        String msg = String.format(
+                "§b[Blizzard] §fоткрыто §e%.0f%% §f| вверх §e%.0f%% §f| сила §e%.2f §f| таймер §e%d",
+                open * 100f, sky * 100f, strength, time);
+
+        p.sendMessage(new net.minecraft.util.text.TextComponentString(msg));
+    }
 
     // ==================== NBT ====================
 
@@ -169,28 +201,27 @@ public class BlizzardHooks {
      * Сначала — тик метели (плавное нарастание/затухание, гашение дождя/грозы).
      * Если метель не активна — детект смены ванильной погоды и возможный авто-старт.
      *
+     * Во время метели раз в тик обновляется экспозиция каждого игрока
+     * и рассылается пакет:
+     *   - сразу, если exposure изменился сильнее SEND_THRESHOLD;
+     *   - иначе раз в 20 тиков для синхронизации таймера на клиенте.
+     *
      * @param world серверный мир.
      */
     public static void tickWeather(World world) {
-        // Только сервер, только Overworld
         if (world.isRemote) return;
         if (world.provider.getDimension() != 0) return;
 
-        // Запоминаем связь WorldInfo → World для writeNBT
         registerWorldInfo(world);
-
-        // Восстанавливаем метель из NBT (один раз после загрузки мира)
         restoreIfNeeded(world);
 
         // ===== Метель активна =====
         if (BlizzardReflection.isBlizzard(world)) {
-            // Тикаем таймер метели
             int time = BlizzardReflection.getBlizzardTime(world) - 1;
             BlizzardReflection.setBlizzardTime(world, time);
 
-            // Плавно двигаем силу: target = 1.0 пока time > 0, иначе 0.0
             float current = BlizzardReflection.getBlizzardStrength(world);
-            float target = (time > 0) ? 1.0F : 0.0F;
+            float target  = (time > 0) ? 1.0F : 0.0F;
 
             if (current < target) current = Math.min(target, current + GROW_DELTA);
             else if (current > target) current = Math.max(target, current - FADE_DELTA);
@@ -198,19 +229,64 @@ public class BlizzardHooks {
             BlizzardReflection.setPrevBlizzardStrength(world, BlizzardReflection.getBlizzardStrength(world));
             BlizzardReflection.setBlizzardStrength(world, current);
 
-            // Плавно гасим дождь/грозу, пока идёт метель
-            world.prevRainingStrength = world.rainingStrength;
-            world.prevThunderingStrength = world.thunderingStrength;
-            world.rainingStrength = Math.max(0.0F, world.rainingStrength - FADE_DELTA * 2);
+            world.prevRainingStrength     = world.rainingStrength;
+            world.prevThunderingStrength  = world.thunderingStrength;
+            world.rainingStrength    = Math.max(0.0F, world.rainingStrength    - FADE_DELTA * 2);
             world.thunderingStrength = Math.max(0.0F, world.thunderingStrength - FADE_DELTA * 2);
 
-            // Конец метели: time <= 0 и strength <= 0
+            // ===== Экспозиция + адресная рассылка =====
+            if (world instanceof WorldServer) {
+                WorldServer ws = (WorldServer) world;
+                long now = ws.getTotalWorldTime();
+
+                for (EntityPlayer p : ws.playerEntities) {
+                    if (!(p instanceof EntityPlayerMP)) continue;
+                    EntityPlayerMP mp = (EntityPlayerMP) p;
+                    if (mp.isSpectator() || mp.isDead) continue;
+
+                    BlizzardExposure.tick(mp, ws);
+                    BlizzardExposure.Entry entry = BlizzardExposure.getEntry(mp);
+
+                    float sky  = BlizzardExposure.getSkyExposure(mp);
+                    float open = BlizzardExposure.getOpenness(mp);
+
+                    // Exposure изменился сильнее порога — шлём сразу.
+                    // Иначе — раз в 20 тиков, чтобы клиент обновлял таймер.
+                    boolean exposureChanged =
+                            entry.lastSentSky < 0f
+                                    || Math.abs(sky  - entry.lastSentSky)  > BlizzardExposure.SEND_THRESHOLD
+                                    || Math.abs(open - entry.lastSentOpen) > BlizzardExposure.SEND_THRESHOLD;
+
+                    boolean timerSync = now - entry.lastSentTick >= 20;
+
+                    if (exposureChanged || timerSync) {
+                        BlizzardManager.NETWORK.sendTo(
+                                new PacketBlizzard(true, time, current, sky, open), mp);
+
+                        entry.lastSentSky  = sky;
+                        entry.lastSentOpen = open;
+                        entry.lastSentTick = now;
+                    }
+
+                    // ===== Отладка в чат раз в секунду =====
+                    sendDebugToChat(mp, sky, open, time, current);
+                }
+            }
+
+            // ===== Конец метели =====
             if (time <= 0 && current <= 0.0F) {
                 BlizzardReflection.setBlizzard(world, false, 0);
-                BlizzardManager.NETWORK.sendToAll(new PacketBlizzard(false, 0, 0.0F));
-            } else {
-                // Синхронизация клиента: сила метели обновляется плавно
-                BlizzardManager.NETWORK.sendToAll(new PacketBlizzard(true, time, current));
+                if (world instanceof WorldServer) {
+                    WorldServer ws = (WorldServer) world;
+                    for (EntityPlayer p : ws.playerEntities) {
+                        if (!(p instanceof EntityPlayerMP)) continue;
+                        BlizzardManager.NETWORK.sendTo(
+                                new PacketBlizzard(false, 0, 0.0F, 1f, 1f),
+                                (EntityPlayerMP) p);
+                    }
+                }
+                BlizzardExposure.clearAll();
+                LAST_DEBUG.clear();
             }
             return;
         }
@@ -231,7 +307,6 @@ public class BlizzardHooks {
         LAST_RAINING.put(world, currentRaining);
         LAST_THUNDERING.put(world, currentThundering);
 
-        // Если смена — проверяем, разрешён ли запуск метели
         if (rainingChanged || thunderingChanged) {
             if (shouldAllowBlizzard(lastRaining, lastThundering, currentRaining, currentThundering)) {
                 if (RANDOM.nextFloat() < BLIZZARD_CHANCE) {
@@ -246,22 +321,26 @@ public class BlizzardHooks {
      * Запускает метель. Сбрасывает ванильную погоду и синхронизирует WorldInfo.
      * Если метель уже шла — сохраняет текущий strength (не сбрасывает в 0).
      *
+     * При старте кэш экспозиции и отладочный таймер очищаются, чтобы
+     * следующий тик tickWeather точно разослал пакеты каждому игроку.
+     *
      * @param world    мир, в котором запускается метель;
      * @param duration длительность в тиках;
      * @param reason   причина запуска (для лога).
      */
     public static void startBlizzard(World world, int duration, String reason) {
         registerWorldInfo(world);
+        BlizzardExposure.clearAll();     // сброс кэша экспозиции
+        LAST_DEBUG.clear();              // сброс отладочного таймера
 
         boolean wasBlizzard = BlizzardReflection.isBlizzard(world);
-
         BlizzardReflection.setBlizzard(world, true, duration);
         if (!wasBlizzard) {
             // Новая метель — сила с 0, плавно растёт
             BlizzardReflection.setBlizzardStrength(world, 0.0F);
             BlizzardReflection.setPrevBlizzardStrength(world, 0.0F);
         }
-        // Если метель уже шла — strength остаётся 1.0, только blizzardTime сбрасывается
+        // Если метель уже шла — strength остаётся, только blizzardTime сбрасывается
 
         WorldInfo info = world.getWorldInfo();
         if (info != null) {
@@ -270,12 +349,33 @@ public class BlizzardHooks {
             BlizzardReflection.setBlizzardStrengthInfo(info, BlizzardReflection.getBlizzardStrength(world));
         }
 
-        // Синхронизация с клиентом сразу
-        BlizzardManager.NETWORK.sendToAll(new PacketBlizzard(true, duration, BlizzardReflection.getBlizzardStrength(world)));
+        // Первичная рассылка — с дефолтными exposure (1/1),
+        // реальные значения придут в следующем тике tickWeather.
+        // Обновляем lastSent*, чтобы первый tickWeather не дублировал пакет.
+        if (world instanceof WorldServer) {
+            WorldServer ws = (WorldServer) world;
+            long now = ws.getTotalWorldTime();
+            float strength = BlizzardReflection.getBlizzardStrength(world);
+
+            for (EntityPlayer p : ws.playerEntities) {
+                if (!(p instanceof EntityPlayerMP)) continue;
+                EntityPlayerMP mp = (EntityPlayerMP) p;
+
+                BlizzardManager.NETWORK.sendTo(
+                        new PacketBlizzard(true, duration, strength, 1f, 1f), mp);
+
+                BlizzardExposure.Entry e = BlizzardExposure.getEntry(mp);
+                e.lastSentSky  = 1f;
+                e.lastSentOpen = 1f;
+                e.lastSentTick = now;
+            }
+        }
 
         // Гасим ванильную погоду
-        info.setRaining(false);
-        info.setThundering(false);
+        if (info != null) {
+            info.setRaining(false);
+            info.setThundering(false);
+        }
 
         // Обновляем LAST, чтобы детектор не запустил метель повторно
         LAST_RAINING.put(world, false);
@@ -283,6 +383,7 @@ public class BlizzardHooks {
 
         System.out.println("[Blizzard] Storm started (" + reason + "): " + duration + " ticks.");
     }
+
 
     /**
      * Проверяет, разрешён ли запуск метели при данной смене погоды.
@@ -301,6 +402,9 @@ public class BlizzardHooks {
     /**
      * Восстанавливает метель из WorldInfo при первом тике после загрузки мира.
      * Срабатывает один раз для каждого World.
+     *
+     * Exposure считается сразу для каждого игрока и отправляется адресно,
+     * чтобы клиент не ждал следующего тика tickWeather.
      *
      * @param world серверный мир.
      */
@@ -325,8 +429,36 @@ public class BlizzardHooks {
                 BlizzardReflection.setBlizzard(world, true, infoTime);
                 BlizzardReflection.setBlizzardStrength(world, infoStrength);
                 BlizzardReflection.setPrevBlizzardStrength(world, infoStrength);
-                BlizzardManager.NETWORK.sendToAll(new PacketBlizzard(true, infoTime, infoStrength));
-                System.out.println("[Blizzard] Restored blizzard from NBT: " + infoTime + " ticks, strength " + infoStrength);
+
+                // Адресная рассылка с посчитанной экспозицией.
+                // WorldServer.playerEntities имеет тип List<EntityPlayer>, поэтому
+                // фильтруем через instanceof — на сервере в списке только EntityPlayerMP.
+                if (world instanceof WorldServer) {
+                    WorldServer ws = (WorldServer) world;
+                    long now = ws.getTotalWorldTime();
+
+                    for (EntityPlayer p : ws.playerEntities) {
+                        if (!(p instanceof EntityPlayerMP)) continue;
+                        EntityPlayerMP mp = (EntityPlayerMP) p;
+                        if (mp.isSpectator() || mp.isDead) continue;
+
+                        BlizzardExposure.tick(mp, ws);
+                        BlizzardExposure.Entry e = BlizzardExposure.getEntry(mp);
+
+                        float sky  = BlizzardExposure.getSkyExposure(mp);
+                        float open = BlizzardExposure.getOpenness(mp);
+
+                        BlizzardManager.NETWORK.sendTo(
+                                new PacketBlizzard(true, infoTime, infoStrength, sky, open), mp);
+
+                        e.lastSentSky  = sky;
+                        e.lastSentOpen = open;
+                        e.lastSentTick = now;
+                    }
+                }
+
+                System.out.println("[Blizzard] Restored blizzard from NBT: "
+                        + infoTime + " ticks, strength " + infoStrength);
             }
         } catch (Throwable t) {
             t.printStackTrace();
@@ -336,5 +468,10 @@ public class BlizzardHooks {
     /** Хук для ASM: возвращает true, если метель активна. */
     public static boolean isBlizzardActive(World world) {
         return BlizzardReflection.isBlizzard(world);
+    }
+
+
+    public static void clearDebugFor(java.util.UUID id) {
+        LAST_DEBUG.remove(id);
     }
 }
