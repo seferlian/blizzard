@@ -1,0 +1,11 @@
+{
+  "ambient.blizzard_wind": {
+    "category": "weather",
+    "sounds": [
+      {
+        "name": "blizzard:ambient/blizzard_wind",
+        "stream": false
+      }
+    ]
+  }
+}

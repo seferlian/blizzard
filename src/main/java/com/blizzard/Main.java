@@ -1,8 +1,11 @@
 package com.blizzard;
 
+import com.blizzard.client.BlizzardSoundHandler;
 import com.blizzard.command.CommandWeatherExtended;
 import com.blizzard.weather.BlizzardManager;
 import com.blizzard.weather.BlizzardPlayerHandler;
+import net.minecraft.util.ResourceLocation;
+import net.minecraft.util.SoundEvent;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.fml.common.FMLCommonHandler;
 import net.minecraftforge.fml.common.Mod;
@@ -10,6 +13,7 @@ import net.minecraftforge.fml.common.Mod.EventHandler;
 import net.minecraftforge.fml.common.event.FMLInitializationEvent;
 import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
 import net.minecraftforge.fml.common.event.FMLServerStartingEvent;
+import net.minecraftforge.fml.common.registry.ForgeRegistries;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -17,9 +21,14 @@ import org.apache.logging.log4j.Logger;
 public class Main {
 
     public static final Logger LOGGER = LogManager.getLogger(Tags.MODID);
+    public static SoundEvent BLIZZARD_WIND;
 
     @EventHandler
     public void preInit(FMLPreInitializationEvent event) {
+        ResourceLocation loc = new ResourceLocation("blizzard", "ambient.blizzard_wind");
+        BLIZZARD_WIND = new SoundEvent(loc).setRegistryName(loc);
+        ForgeRegistries.SOUND_EVENTS.register(BLIZZARD_WIND);
+
         MinecraftForge.EVENT_BUS.register(this);
     }
 
@@ -31,6 +40,8 @@ public class Main {
         //MinecraftForge.EVENT_BUS.register(new BlizzardSaveHandler());
         if (FMLCommonHandler.instance().getSide().isClient()) {
             MinecraftForge.EVENT_BUS.register(new com.blizzard.client.BlizzardShader());
+            MinecraftForge.EVENT_BUS.register(new BlizzardSoundHandler());
+            BlizzardSoundHandler.setSound(BLIZZARD_WIND);
         }
 
     }
