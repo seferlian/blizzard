@@ -29,15 +29,20 @@ public class BlizzardPlayerHandler {
      */
     @SubscribeEvent
     public void onPlayerLogin(PlayerEvent.PlayerLoggedInEvent event) {
+        // Обрабатываем только серверных игроков (на клиенте этот ивент не нужен)
         if (!(event.player instanceof EntityPlayerMP)) return;
         EntityPlayerMP player = (EntityPlayerMP) event.player;
+        // Мир должен быть серверным (isRemote == false), иначе это клиент
         World world = player.world;
         if (world == null || world.isRemote) return;
-
+        // Регистрируем WorldInfo → World, чтобы writeNBT смог синхронизировать
+        // актуальное состояние метели перед сохранением мира
         BlizzardHooks.registerWorldInfo(world);
 
+        // Метель существует только в Overworld — для других измерений выходим
         if (world.provider.getDimension() != 0) return;
 
+        // Если метель активна — сразу отправляем пакет новому игроку
         if (BlizzardReflection.isBlizzard(world)) {
             // Считаем экспозицию сразу, чтобы клиент не ждал 4 тика
             BlizzardExposure.tick(player, world);

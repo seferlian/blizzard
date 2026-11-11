@@ -1,8 +1,13 @@
 package com.blizzard;
 
+import com.blizzard.capabilities.BlizzardCapabilityHandler;
+import com.blizzard.capabilities.BlizzardColdHandler;
+import com.blizzard.client.BlizzardColdHud;
+import com.blizzard.client.BlizzardShader;
 import com.blizzard.client.BlizzardSoundHandler;
 import com.blizzard.command.CommandWeatherExtended;
 import com.blizzard.raycast.BlizzardClientExposure;
+import com.blizzard.registry.BlizzardCapabilities;
 import com.blizzard.weather.BlizzardManager;
 import com.blizzard.weather.BlizzardPlayerHandler;
 import net.minecraft.util.ResourceLocation;
@@ -30,6 +35,9 @@ public class Main {
         BLIZZARD_WIND = new SoundEvent(loc).setRegistryName(loc);
         ForgeRegistries.SOUND_EVENTS.register(BLIZZARD_WIND);
 
+        // Регистрация capability (общая для клиента и сервера)
+        BlizzardCapabilities.register();
+
         MinecraftForge.EVENT_BUS.register(this);
     }
 
@@ -37,15 +45,20 @@ public class Main {
     public void init(FMLInitializationEvent event) {
         BlizzardManager.initNetwork();
         MinecraftForge.EVENT_BUS.register(new BlizzardPlayerHandler());
+
+        // Capability-хуки (общие)
+        MinecraftForge.EVENT_BUS.register(new BlizzardCapabilityHandler());
+        MinecraftForge.EVENT_BUS.register(new BlizzardColdHandler());
+
         LOGGER.info("Blizzard network initialized.");
-        //MinecraftForge.EVENT_BUS.register(new BlizzardSaveHandler());
+
         if (FMLCommonHandler.instance().getSide().isClient()) {
-            MinecraftForge.EVENT_BUS.register(new com.blizzard.client.BlizzardShader());
+            MinecraftForge.EVENT_BUS.register(new BlizzardShader());
             MinecraftForge.EVENT_BUS.register(new BlizzardSoundHandler());
             BlizzardSoundHandler.setSound(BLIZZARD_WIND);
             MinecraftForge.EVENT_BUS.register(new BlizzardClientExposure());
+            MinecraftForge.EVENT_BUS.register(new BlizzardColdHud());
         }
-
     }
 
     @EventHandler

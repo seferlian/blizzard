@@ -1,5 +1,6 @@
 package com.blizzard.weather;
 
+import com.blizzard.network.client.ClientPacketHandlerCold;
 import net.minecraftforge.fml.common.network.NetworkRegistry;
 import net.minecraftforge.fml.common.network.simpleimpl.SimpleNetworkWrapper;
 import net.minecraftforge.fml.relauncher.Side;
@@ -37,5 +38,18 @@ public class BlizzardManager {
                 0,                             // уникальный id в канале
                 Side.CLIENT                    // сторона, где обрабатывается
         );
+        /**
+         *
+         * Пакет PacketBlizzard:
+         * id 1 (уникален в пределах этого канала);
+         * обрабатывается на стороне CLIENT (сервер шлёт — клиент принимает).
+         */
+        NETWORK.registerMessage(
+                ClientPacketHandlerCold.class,
+                ClientPacketHandlerCold.Packet.class,
+                1,
+                Side.CLIENT
+        );
+
     }
 }

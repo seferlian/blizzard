@@ -156,6 +156,7 @@ public class BlizzardHooks {
 
     /** Object-обёртка tickWeather для ASM-хука. */
     public static void tickWeather(Object world) {
+        // Только сервер, только Overworld
         if (!(world instanceof World)) return;
         tickWeather((World) world);
     }
@@ -209,17 +210,20 @@ public class BlizzardHooks {
      * @param world серверный мир.
      */
     public static void tickWeather(World world) {
+        // Только сервер, только Overworld
         if (world.isRemote) return;
         if (world.provider.getDimension() != 0) return;
-
+        // Запоминаем связь WorldInfo → World для writeNBT
         registerWorldInfo(world);
+        // Восстанавливаем метель из NBT (один раз после загрузки мира)
         restoreIfNeeded(world);
 
         // ===== Метель активна =====
         if (BlizzardReflection.isBlizzard(world)) {
+            // Тикаем таймер метели
             int time = BlizzardReflection.getBlizzardTime(world) - 1;
             BlizzardReflection.setBlizzardTime(world, time);
-
+            // Плавно двигаем силу: target = 1.0 пока time > 0, иначе 0.0
             float current = BlizzardReflection.getBlizzardStrength(world);
             float target  = (time > 0) ? 1.0F : 0.0F;
 
@@ -228,7 +232,7 @@ public class BlizzardHooks {
 
             BlizzardReflection.setPrevBlizzardStrength(world, BlizzardReflection.getBlizzardStrength(world));
             BlizzardReflection.setBlizzardStrength(world, current);
-
+            // Плавно гасим дождь/грозу, пока идёт метель
             world.prevRainingStrength     = world.rainingStrength;
             world.prevThunderingStrength  = world.thunderingStrength;
             world.rainingStrength    = Math.max(0.0F, world.rainingStrength    - FADE_DELTA * 2);
@@ -307,6 +311,7 @@ public class BlizzardHooks {
         LAST_RAINING.put(world, currentRaining);
         LAST_THUNDERING.put(world, currentThundering);
 
+        // Если смена — проверяем, разрешён ли запуск метели
         if (rainingChanged || thunderingChanged) {
             if (shouldAllowBlizzard(lastRaining, lastThundering, currentRaining, currentThundering)) {
                 if (RANDOM.nextFloat() < BLIZZARD_CHANCE) {
