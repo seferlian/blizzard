@@ -298,8 +298,7 @@ public class BlizzardShader {
                     double sx = l1 + offX + 0.5 + windShift;
                     double sz = k1 + offZ + 0.5 + windShift * 0.5;
 
-                    // Высота осадков в реальной точке (sx, sz)
-                    int rx = MathHelper.floor(sx);
+                    /*int rx = MathHelper.floor(sx);
                     int rz = MathHelper.floor(sz);
                     pos.setPos(rx, 0, rz);
                     int j2 = world.getPrecipitationHeight(pos).getY();
@@ -308,6 +307,28 @@ public class BlizzardShader {
 
                     // Диапазон падения: от max(поверхность, игрок-10) до игрок+12
                     double k2 = Math.max((double) j2, j - 10);
+                    double l2 = j + 12;
+                    if (k2 >= l2) continue;*/
+
+                    // Высота поверхности в фактической (снесённой) точке
+                    int rx = MathHelper.floor(sx);
+                    int rz = MathHelper.floor(sz);
+                    pos.setPos(rx, 0, rz);
+                    int j2 = world.getPrecipitationHeight(pos).getY();
+                    if (j2 <= 0) j2 = world.getHeight(rx, rz);
+                    if (j2 <= 0) j2 = (int) j;
+
+                    // Высота поверхности в точке спавна (без сноса)
+                    int sx0 = MathHelper.floor(l1 + offX + 0.5);
+                    int sz0 = MathHelper.floor(k1 + offZ + 0.5);
+                    pos.setPos(sx0, 0, sz0);
+                    int j2Spawn = world.getPrecipitationHeight(pos).getY();
+                    if (j2Spawn <= 0) j2Spawn = world.getHeight(sx0, sz0);
+                    if (j2Spawn <= 0) j2Spawn = (int) j;
+
+                    // Низ траектории — не ниже поверхности ни в спавне, ни в текущей точке.
+                    // Это не даёт снежинке опуститься ниже крыши/стены снесённого столбца.
+                    double k2 = Math.max((double) Math.max(j2, j2Spawn), j - 10);
                     double l2 = j + 12;
                     if (k2 >= l2) continue;
 
