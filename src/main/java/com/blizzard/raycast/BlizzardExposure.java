@@ -311,6 +311,19 @@ public final class BlizzardExposure {
         return 0f;
     }
 
+
+    /**
+     * Очищает карту источников тепла для игрока.
+     * Вызывается при смерти, чтобы после респавна игрок не получал
+     * фантомное тепло от факелов, найденных до смерти.
+     */
+    public static void clearHeatSources(EntityPlayerMP player) {
+        Entry e = CACHE.get(player.getUniqueID());
+        if (e != null) {
+            e.heatSources.clear();
+        }
+    }
+
     public static void clear(EntityPlayerMP player) {
         CACHE.remove(player.getUniqueID());
     }
