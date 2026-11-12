@@ -31,16 +31,25 @@ public class BlizzardColdHandler {
         // Сброс только при смерти; при возврате из End холод сохраняется
         if (!event.isWasDeath()) return;
 
-        // Сбрасываем накопленный холод
+        // 1. Сбрасываем накопленный холод в новой capability
         BlizzardColdCapability newCap = event.getEntityPlayer()
                 .getCapability(BlizzardCapabilities.BLIZZARD_COLD, null);
         if (newCap != null) {
             newCap.setCold(0f);
         }
 
-        // Сбрасываем найденные источники тепла
+        // 2. Если это серверный игрок, очищаем источники тепла и шлём пакет
         if (event.getEntityPlayer() instanceof EntityPlayerMP) {
-            BlizzardExposure.clearHeatSources((EntityPlayerMP) event.getEntityPlayer());
+            EntityPlayerMP player = (EntityPlayerMP) event.getEntityPlayer();
+
+            // Сбрасываем найденные источники тепла
+            BlizzardExposure.clearHeatSources(player);
+
+            // Немедленно синхронизируем клиент, чтобы шкала исчезла сразу
+            BlizzardManager.NETWORK.sendTo(
+                    new ClientPacketHandlerCold.Packet(0f),
+                    player
+            );
         }
     }
 }
