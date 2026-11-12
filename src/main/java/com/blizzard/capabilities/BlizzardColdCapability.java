@@ -154,12 +154,22 @@ public class BlizzardColdCapability {
             if (fullStrength && exposure > EXPOSURE_THRESHOLD) {
                 float norm = (exposure - EXPOSURE_THRESHOLD) / (1f - EXPOSURE_THRESHOLD);
 
-                // Считаем суммарный штраф от всех надетых деталей брони
+                // 1. Броня
                 int armorPieces = countArmorPieces(player);
                 float armorSlowdown = Math.min(1.0f, armorPieces * ARMOR_SLOT_SLOWDOWN);
                 float multiplier = 1.0f - armorSlowdown;
 
+                // 2. Тепло от огня/факелов
+                float heatProtection = BlizzardExposure.getHeatProtection(player);
+                multiplier *= (1.0f - heatProtection);
+
+                // 3. Вода (если применяется)
+                if (player.isInWater()) {
+                    multiplier *= 2.0f;
+                }
+
                 this.cold += (COLD_GAIN_PER_TICK * norm) * multiplier;
+
             } else {
                 this.cold -= DRAIN_PER_TICK;
             }

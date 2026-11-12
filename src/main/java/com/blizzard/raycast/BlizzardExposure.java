@@ -4,6 +4,7 @@ import net.minecraft.block.Block;
 import net.minecraft.block.BlockLiquid;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.entity.player.EntityPlayerMP;
+import net.minecraft.init.Blocks;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.RayTraceResult;
 import net.minecraft.util.math.Vec3d;
@@ -24,6 +25,13 @@ import java.util.UUID;
  *                 «Сколько открытого пространства вокруг».
  *
  * Пересчёт не чаще раза в UPDATE_EVERY тиков и только при сдвиге > 1 блока.
+ *
+ * Дополнительно:
+ *   - Детерминированный поиск источников тепла (факелы, огонь, лава)
+ *     в радиусе MAX_HEAT_DISTANCE вокруг игрока. Это надёжнее и быстрее,
+ *     чем рейкасты, так как не зависит от случайных направлений лучей.
+ *   - Хранение найденных источников в Map для того, чтобы они не "мерцали"
+ *     при каждом новом рейкасте.
  */
 public final class BlizzardExposure {
 
@@ -39,6 +47,9 @@ public final class BlizzardExposure {
     /** Порог изменения, при котором пакет шлётся немедленно (не ждём 4 тика). */
     public static final float SEND_THRESHOLD = 0.15f;
 
+    /** Максимальное расстояние, на котором действует тепло от огня. */
+    private static final float MAX_HEAT_DISTANCE = 5.0f;
+
     private static final Random RNG = new Random();
 
     /** Состояние на одного игрока. */
@@ -53,6 +64,19 @@ public final class BlizzardExposure {
         public float    targetOpen;
 
         public boolean  initialized;
+
+        /**
+         * Активные источники тепла вокруг игрока.
+         * Ключ — абсолютные координаты блока. Значение — сила тепла.
+         * Мы храним их, чтобы случайные лучи не заставляли факелы "мерцать".
+         */
+        public final java.util.Map<BlockPos, Float> heatSources = new java.util.HashMap<>();
+
+        /**
+         * Измерение, в котором были найдены источники.
+         * Нужно для очистки при телепортации.
+         */
+        public int dimension = Integer.MIN_VALUE;
 
         public float lastSentSky  = -1f;
         public float lastSentOpen = -1f;
@@ -117,18 +141,28 @@ public final class BlizzardExposure {
         long now = world.getTotalWorldTime();
         Entry e = getEntry(player);
 
+        // Если игрок сменил измерение (или это первый вход), очищаем старые данные
+        if (e.dimension != player.dimension) {
+            e.heatSources.clear();
+            e.lastPos = null;
+            e.lastTick = 0;
+            e.dimension = player.dimension;
+        }
+
         boolean moved = e.lastPos == null
                 || player.getPosition().distanceSq(e.lastPos) > 1;
 
-        // 1. РЕЙКАСТЫ (редко)
+        // 1. РЕЙКАСТЫ И ПОИСК ТЕПЛА (редко)
         long interval = moved ? UPDATE_EVERY : 20;
         if (now - e.lastTick >= interval) {
             e.lastPos = player.getPosition();
             e.lastTick = now;
 
             Vec3d eye = player.getPositionEyes(1.0f);
-            float rawSky  = castCone(world, eye, RAYS_SKY, RADIUS_SKY, SKY_CONE_DEG);
-            float rawOpen = castSphere(world, eye, RAYS_SPHERE, RADIUS_SPHERE);
+
+            // Рейкасты для openness и skyExposure
+            float rawSky  = castCone(world, eye, RAYS_SKY, RADIUS_SKY, SKY_CONE_DEG, e);
+            float rawOpen = castSphere(world, eye, RAYS_SPHERE, RADIUS_SPHERE, e);
 
             if (!e.initialized) {
                 e.skySmoothed  = rawSky;
@@ -137,18 +171,37 @@ public final class BlizzardExposure {
                 e.targetOpen   = rawOpen;
                 e.initialized  = true;
             } else {
-                // Обновляем цель
                 e.targetSky  = rawSky;
                 e.targetOpen = rawOpen;
+            }
+
+            // ДЕТЕРМИНИРОВАННЫЙ ПОИСК ТЕПЛА
+            findHeatSources(world, eye, e);
+
+            // ОЧИСТКА СТАРЫХ ИСТОЧНИКОВ
+            // Проходим по всем сохранённым источникам и удаляем те,
+            // которые стали слишком далеко (игрок ушёл) или были сломаны.
+            java.util.Iterator<java.util.Map.Entry<BlockPos, Float>> it = e.heatSources.entrySet().iterator();
+            while (it.hasNext()) {
+                java.util.Map.Entry<BlockPos, Float> entry = it.next();
+                BlockPos pos = entry.getKey();
+
+                // Если блок сломали — удаляем
+                if (getHeatStrength(world, pos) <= 0f) {
+                    it.remove();
+                    continue;
+                }
+
+                // Если игрок ушёл слишком далеко — удаляем
+                double distSq = eye.squareDistanceTo(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+                if (distSq > MAX_HEAT_DISTANCE * MAX_HEAT_DISTANCE) {
+                    it.remove();
+                }
             }
         }
 
         // 2. ПЛАВНОЕ ДВИЖЕНИЕ К ЦЕЛИ (каждый тик)
-        // Если цель далеко (например, вышли из пещеры), движемся к ней
-        // фиксированным шагом, чтобы на клиент уходили плавные значения каждый тик.
         if (e.initialized) {
-            // Шаг за тик. При 20 тиках в секунду (1 сек = 20 тиков)
-            // полный переход (от 0 до 1) займет 1 секунду (0.05f * 20).
             float step = 0.05f;
 
             if (e.skySmoothed < e.targetSky) {
@@ -165,6 +218,99 @@ public final class BlizzardExposure {
         }
     }
 
+    /**
+     * Детерминированно ищет источники тепла в кубе вокруг игрока.
+     * Проходит по всем блокам в радиусе MAX_HEAT_DISTANCE (5 блоков).
+     *
+     * Вызывается раз в UPDATE_EVERY или 20 тиков (не каждый тик).
+     */
+    private static void findHeatSources(World world, Vec3d eye, Entry e) {
+        int radius = (int) Math.ceil(MAX_HEAT_DISTANCE);
+        int cx = (int) Math.floor(eye.x);
+        int cy = (int) Math.floor(eye.y);
+        int cz = (int) Math.floor(eye.z);
+
+        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dy = -radius; dy <= radius; dy++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    // Проверяем расстояние по квадрату (быстро, без sqrt)
+                    if (dx * dx + dy * dy + dz * dz > MAX_HEAT_DISTANCE * MAX_HEAT_DISTANCE) {
+                        continue;
+                    }
+
+                    pos.setPos(cx + dx, cy + dy, cz + dz);
+
+                    // Проверяем только загруженные чанки
+                    if (!world.isBlockLoaded(pos)) continue;
+
+                    // Проверяем, является ли блок источником тепла
+                    float heat = getHeatStrength(world, pos);
+                    if (heat > 0f) {
+                        // Запоминаем источник (toImmutable, чтобы координаты не менялись)
+                        e.heatSources.put(pos.toImmutable(), heat);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Возвращает процент защиты от холода благодаря всем найденным источникам тепла.
+     *
+     * Используется логарифмическая шкала (убывающая отдача).
+     * Расстояние до каждого источника пересчитывается "на лету", чтобы
+     * защита плавно снижалась, если игрок отходит от факела.
+     *
+     * @param p серверный игрок.
+     * @return 0.0 .. 0.9 (максимум 90% защиты).
+     */
+    public static float getHeatProtection(EntityPlayerMP p) {
+        Entry e = CACHE.get(p.getUniqueID());
+        if (e == null || e.heatSources.isEmpty()) return 0f;
+
+        Vec3d eye = p.getPositionEyes(1.0f);
+        float totalHeatSum = 0f;
+        World world = p.world;
+
+        for (java.util.Map.Entry<BlockPos, Float> entry : e.heatSources.entrySet()) {
+            BlockPos pos = entry.getKey();
+            float strength = entry.getValue();
+
+            // Проверяем, существует ли ещё блок и всё ещё даёт тепло
+            if (getHeatStrength(world, pos) <= 0f) continue;
+
+            // Расстояние от глаз до центра блока
+            double dist = Math.sqrt(eye.squareDistanceTo(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5));
+            if (dist > MAX_HEAT_DISTANCE) continue;
+
+            // Коэффициент расстояния: 1.0 вплотную, 0.0 на максимальном расстоянии
+            float distFactor = 1.0f - ((float) dist / MAX_HEAT_DISTANCE);
+            totalHeatSum += strength * distFactor;
+        }
+
+        if (totalHeatSum <= 0f) return 0f;
+
+        // Логарифмическая шкала (убывающая отдача)
+        float protection = 1.0f - (1.0f / (1.0f + totalHeatSum));
+
+        return Math.min(0.9f, protection);
+    }
+
+    /**
+     * Возвращает силу тепла для блока (0, если блок не греет).
+     */
+    private static float getHeatStrength(World world, BlockPos pos) {
+        Block block = world.getBlockState(pos).getBlock();
+
+        if (block == Blocks.TORCH) return 0.05f;
+        if (block == Blocks.FIRE) return 0.15f;
+        if (block == Blocks.LAVA || block == Blocks.FLOWING_LAVA) return 0.25f;
+
+        return 0f;
+    }
+
     public static void clear(EntityPlayerMP player) {
         CACHE.remove(player.getUniqueID());
     }
@@ -175,7 +321,10 @@ public final class BlizzardExposure {
 
     // ===== Рейкасты =====
 
-    private static float castSphere(World world, Vec3d eye, int rays, double R) {
+    /**
+     * Пускает лучи по сфере и считает долю открытых.
+     */
+    private static float castSphere(World world, Vec3d eye, int rays, double R, Entry e) {
         int open = 0;
         for (int i = 0; i < rays; i++) {
             Vec3d dir = randomUnitVector(RNG);
@@ -202,7 +351,7 @@ public final class BlizzardExposure {
      * @param halfAngleDeg полуугол конуса от вертикали в градусах.
      * @return доля открытых лучей 0..1 (open / accepted).
      */
-    private static float castCone(World world, Vec3d eye, int rays, double R, double halfAngleDeg) {
+    private static float castCone(World world, Vec3d eye, int rays, double R, double halfAngleDeg, Entry e) {
         double cosMax = Math.cos(Math.toRadians(halfAngleDeg));
         int open = 0;
         int accepted = 0;
@@ -222,9 +371,7 @@ public final class BlizzardExposure {
      * true, если луч не упёрся в «непрозрачный для снега» блок.
      * Листва и жидкости пролетаются.
      *
-     * Консервативно: если конец луча в незагруженном чанке — считаем «закрыто».
-     * Иначе в пещере на границе чанков луч «уходит в пустоту» и даёт ложную
-     * открытость (2-3% в закрытом коридоре).
+     * Поиск тепла перенесён в findHeatSources() для лучшей оптимизации.
      */
     private static boolean isRayOpen(World world, Vec3d from, Vec3d dir, double R) {
         Vec3d current = from;
@@ -244,15 +391,16 @@ public final class BlizzardExposure {
 
             IBlockState st = world.getBlockState(pos);
             Block block = st.getBlock();
+
             if (block.isLeaves(st, world, pos) || block instanceof BlockLiquid) {
                 double consumed = current.distanceTo(hit.hitVec);
                 remaining -= consumed + 0.01;
                 current = hit.hitVec.add(dir.scale(0.01));
                 continue;
             }
-            return false; // упёрлись в твёрдый блок
+            return false;
         }
-        return true; // исчерпали глубину — считаем открытым (листва/вода не бесконечны)
+        return true;
     }
 
     private static Vec3d randomUnitVector(Random r) {
