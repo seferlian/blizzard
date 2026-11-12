@@ -6,6 +6,7 @@ import com.blizzard.weather.BlizzardManager;
 import com.blizzard.weather.BlizzardReflection;
 import com.blizzard.network.client.ClientPacketHandlerCold;
 import net.minecraft.entity.player.EntityPlayerMP;
+import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 
 import java.util.concurrent.ThreadLocalRandom;
@@ -15,6 +16,8 @@ import java.util.concurrent.ThreadLocalRandom;
  *
  * МЕХАНИКА:
  * - Растёт, пока игрок «открыт» метели (exposure > 5%) и метель активна.
+ * - Скорость роста задается в количестве за тик (легко переносится в конфиг).
+ * - Каждая надетая деталь брони замедляет накопление на заданный процент.
  * - Медленно убывает, если exposure < 5% или метель закончилась.
  * - cold = 0..1. При 0 шкала в HUD не рисуется.
  * - Сбрасывается после смерти (PlayerEvent.Clone с isWasDeath).
@@ -27,14 +30,31 @@ public class BlizzardColdCapability {
     /** Порог exposure, ниже которого холод убывает, а не растёт. */
     public static final float EXPOSURE_THRESHOLD = 0.05f;
 
-    /** Скорость роста при exposure = 1.0 (полный холод за ~30 секунд). */
-    private static final float GAIN_PER_TICK = 1.0f / (30 * 20);
+    // ======================== ПАРАМЕТРЫ (КАНДИДАТЫ В КОНФИГ) ========================
 
-    /** Скорость убывания при exposure = 0 (полный сброс за ~60 секунд). */
+    /**
+     * Базовая скорость накопления холода за 1 тик (без брони).
+     * 1.0f / 1200.0f = полное заполнение шкалы за 60 секунд (1 минуту).
+     */
+    private static final float COLD_GAIN_PER_TICK = 1.0f / (60 * 20);
+
+    /**
+     * Насколько снижается скорость накопления за КАЖДУЮ надетую деталь брони.
+     * 0.15f = каждая деталь замедляет накопление на 15%.
+     * Если надеть все 4 детали, замедление будет 60% (скорость упадёт до 40%).
+     * При 0.25f (4 детали = 100%) броня будет давать полную защиту (холод не растёт).
+     */
+    private static final float ARMOR_SLOT_SLOWDOWN = 0.15f;
+
+    /**
+     * Скорость убывания при отсутствии метели (полный сброс за ~60 секунд).
+     */
     private static final float DRAIN_PER_TICK = 1.0f / (60 * 20);
 
     /** Интервал синхронизации с клиентом. */
     private static final int SYNC_INTERVAL = 20;
+
+    // ======================== УРОН (КАНДИДАТЫ В КОНФИГ) ========================
 
     /** Cold, при котором начинается урон. */
     private static final float DAMAGE_START_COLD = 0.2f;
@@ -49,10 +69,12 @@ public class BlizzardColdCapability {
     private static final float DAMAGE_MAX = 8.0f;
 
     /** Интервал между ударами в тиках при cold = DAMAGE_START_COLD. */
-    private static final int INTERVAL_MAX = 200;
+    private static final int INTERVAL_MAX = 100;
 
     /** Интервал между ударами в тиках при cold = DAMAGE_END_COLD. */
     private static final int INTERVAL_MIN = 10;
+
+    // ======================== ПОЛЯ ========================
 
     /** Тик, на котором последний раз наносили урон. */
     private long lastDamageTick = 0;
@@ -131,7 +153,13 @@ public class BlizzardColdCapability {
 
             if (fullStrength && exposure > EXPOSURE_THRESHOLD) {
                 float norm = (exposure - EXPOSURE_THRESHOLD) / (1f - EXPOSURE_THRESHOLD);
-                this.cold += GAIN_PER_TICK * norm;
+
+                // Считаем суммарный штраф от всех надетых деталей брони
+                int armorPieces = countArmorPieces(player);
+                float armorSlowdown = Math.min(1.0f, armorPieces * ARMOR_SLOT_SLOWDOWN);
+                float multiplier = 1.0f - armorSlowdown;
+
+                this.cold += (COLD_GAIN_PER_TICK * norm) * multiplier;
             } else {
                 this.cold -= DRAIN_PER_TICK;
             }
@@ -150,6 +178,23 @@ public class BlizzardColdCapability {
         this.tick++;
     }
 
+    /**
+     * Считает количество надетых деталей брони (0..4).
+     * Проверяет только слоты шлема, нагрудника, штанов и ботинок.
+     *
+     * В 1.12.2 слоты брони в инвентаре игрока:
+     * 36 — ботинки, 37 — штаны, 38 — нагрудник, 39 — шлем.
+     */
+    private int countArmorPieces(EntityPlayerMP player) {
+        int count = 0;
+        for (int i = 36; i <= 39; i++) {
+            ItemStack stack = player.inventory.getStackInSlot(i);
+            if (!stack.isEmpty()) {
+                count++;
+            }
+        }
+        return count;
+    }
 
     /**
      * Наносит урон холодом.
@@ -158,16 +203,28 @@ public class BlizzardColdCapability {
      *   cold = DAMAGE_START_COLD → interval = INTERVAL_MAX, damage = DAMAGE_MIN
      *   cold = DAMAGE_END_COLD   → interval = INTERVAL_MIN, damage = DAMAGE_MAX
      *
-     * Между ними — линейная интерполяция. Без изломов.
-     * Все параметры — кандидаты в конфиг.
+     * ВАЖНО: Если игрок находится в воде, частота ударов всегда максимальная
+     * (interval = INTERVAL_MIN), независимо от текущего уровня холода.
+     * Это имитирует быстрое переохлаждение в мокрой одежде.
      */
     private void applyColdDamage(EntityPlayerMP player) {
+        // Проверяем, находится ли игрок в воде
+        boolean inWater = player.isInWater();
+
         // t ∈ [0, 1] — насколько cold продвинулся от начала до конца шкалы
         float t = (this.cold - DAMAGE_START_COLD) / (DAMAGE_END_COLD - DAMAGE_START_COLD);
         if (t < 0f) t = 0f;
         if (t > 1f) t = 1f;
 
-        int interval = (int) (INTERVAL_MAX + (INTERVAL_MIN - INTERVAL_MAX) * t);
+        // Считаем интервал
+        int interval;
+        if (inWater) {
+            // В воде интервал всегда минимальный (максимальная частота)
+            interval = INTERVAL_MIN;
+        } else {
+            interval = (int) (INTERVAL_MAX + (INTERVAL_MIN - INTERVAL_MAX) * t);
+        }
+
         float damage = DAMAGE_MIN + (DAMAGE_MAX - DAMAGE_MIN) * t;
 
         long now = player.world.getTotalWorldTime();
