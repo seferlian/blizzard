@@ -2,6 +2,7 @@ package com.blizzard;
 
 import com.blizzard.capabilities.BlizzardCapabilityHandler;
 import com.blizzard.capabilities.BlizzardColdHandler;
+import com.blizzard.client.BlizzardClientCold;
 import com.blizzard.client.BlizzardColdHud;
 import com.blizzard.client.BlizzardShader;
 import com.blizzard.client.BlizzardSoundHandler;
@@ -57,6 +58,7 @@ public class Main {
             MinecraftForge.EVENT_BUS.register(new BlizzardSoundHandler());
             BlizzardSoundHandler.setSound(BLIZZARD_WIND);
             MinecraftForge.EVENT_BUS.register(new BlizzardClientExposure());
+            MinecraftForge.EVENT_BUS.register(new BlizzardClientCold());
             MinecraftForge.EVENT_BUS.register(new BlizzardColdHud());
         }
     }

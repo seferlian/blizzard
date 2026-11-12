@@ -1,5 +1,6 @@
 package com.blizzard.capabilities;
 
+import com.blizzard.damage.BlizzardDamageSource;
 import com.blizzard.raycast.BlizzardExposure;
 import com.blizzard.weather.BlizzardManager;
 import com.blizzard.weather.BlizzardReflection;
@@ -35,6 +36,27 @@ public class BlizzardColdCapability {
     /** Интервал синхронизации с клиентом. */
     private static final int SYNC_INTERVAL = 20;
 
+    /** Cold, при котором начинается урон. */
+    private static final float DAMAGE_START_COLD = 0.2f;
+
+    /** Cold, при котором достигается максимум. */
+    private static final float DAMAGE_END_COLD = 1.0f;
+
+    /** Урон за удар при cold = DAMAGE_START_COLD. */
+    private static final float DAMAGE_MIN = 0.5f;
+
+    /** Урон за удар при cold = DAMAGE_END_COLD. */
+    private static final float DAMAGE_MAX = 8.0f;
+
+    /** Интервал между ударами в тиках при cold = DAMAGE_START_COLD. */
+    private static final int INTERVAL_MAX = 200;
+
+    /** Интервал между ударами в тиках при cold = DAMAGE_END_COLD. */
+    private static final int INTERVAL_MIN = 10;
+
+    /** Тик, на котором последний раз наносили урон. */
+    private long lastDamageTick = 0;
+
     /** Накопленный холод 0..1. */
     private float cold;
 
@@ -57,6 +79,9 @@ public class BlizzardColdCapability {
 
     public void setCold(float value) {
         this.cold = clamp01(value);
+        if (this.cold <= 0f) {
+            this.lastDamageTick = 0;
+        }
     }
 
     // ======================== ТИК ========================
@@ -69,6 +94,19 @@ public class BlizzardColdCapability {
     public void update(EntityPlayerMP player) {
         if (player.world == null || player.world.isRemote) return;
         if (player.isDead || player.isSpectator()) return;
+
+        // Только выживание и приключение
+        if (player.isCreative() || player.isSpectator()) {
+            if (this.cold != 0f) {
+                this.cold = 0f;
+                // немедленно синхронизируем клиент
+                BlizzardManager.NETWORK.sendTo(
+                        new ClientPacketHandlerCold.Packet(0f),
+                        player
+                );
+            }
+            return;
+        }
 
         // Вне Overworld холод не накапливается, но и не сбрасывается мгновенно
         if (player.world.provider.getDimension() != 0) {
@@ -84,8 +122,14 @@ public class BlizzardColdCapability {
             // Гарантируем, что exposure посчитан (tickWeather мог не успеть)
             BlizzardExposure.tick(player, player.world);
 
+            float strength = BlizzardReflection.getBlizzardStrength(player.world);
             float exposure = BlizzardExposure.getExposure(player);
-            if (exposure > EXPOSURE_THRESHOLD) {
+
+            // Холод накапливается только при полной силе метели
+            // и при достаточной открытости
+            boolean fullStrength = strength >= 0.999f;
+
+            if (fullStrength && exposure > EXPOSURE_THRESHOLD) {
                 float norm = (exposure - EXPOSURE_THRESHOLD) / (1f - EXPOSURE_THRESHOLD);
                 this.cold += GAIN_PER_TICK * norm;
             } else {
@@ -96,8 +140,41 @@ public class BlizzardColdCapability {
         }
 
         this.cold = clamp01(this.cold);
+
+        // Урон (только во время метели и только если cold дошёл до порога)
+        if (blizzard && this.cold >= DAMAGE_START_COLD) {
+            this.applyColdDamage(player);
+        }
+
         this.scheduleSync(player);
         this.tick++;
+    }
+
+
+    /**
+     * Наносит урон холодом.
+     *
+     * Шкала линейная:
+     *   cold = DAMAGE_START_COLD → interval = INTERVAL_MAX, damage = DAMAGE_MIN
+     *   cold = DAMAGE_END_COLD   → interval = INTERVAL_MIN, damage = DAMAGE_MAX
+     *
+     * Между ними — линейная интерполяция. Без изломов.
+     * Все параметры — кандидаты в конфиг.
+     */
+    private void applyColdDamage(EntityPlayerMP player) {
+        // t ∈ [0, 1] — насколько cold продвинулся от начала до конца шкалы
+        float t = (this.cold - DAMAGE_START_COLD) / (DAMAGE_END_COLD - DAMAGE_START_COLD);
+        if (t < 0f) t = 0f;
+        if (t > 1f) t = 1f;
+
+        int interval = (int) (INTERVAL_MAX + (INTERVAL_MIN - INTERVAL_MAX) * t);
+        float damage = DAMAGE_MIN + (DAMAGE_MAX - DAMAGE_MIN) * t;
+
+        long now = player.world.getTotalWorldTime();
+        if (now - this.lastDamageTick >= interval) {
+            this.lastDamageTick = now;
+            player.attackEntityFrom(BlizzardDamageSource.COLD, damage);
+        }
     }
 
     /** Планирует отправку пакета раз в SYNC_INTERVAL тиков (со смещением). */

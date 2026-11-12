@@ -1,6 +1,8 @@
 package com.blizzard.capabilities;
 
+import com.blizzard.network.client.ClientPacketHandlerCold;
 import com.blizzard.registry.BlizzardCapabilities;
+import com.blizzard.weather.BlizzardManager;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraftforge.event.entity.player.PlayerEvent;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
@@ -25,13 +27,20 @@ public class BlizzardColdHandler {
 
     @SubscribeEvent
     public void onPlayerClone(PlayerEvent.Clone event) {
-        // Сброс только при смерти; при возврате из End холод сохраняется
         if (!event.isWasDeath()) return;
 
         BlizzardColdCapability newCap = event.getEntityPlayer()
                 .getCapability(BlizzardCapabilities.BLIZZARD_COLD, null);
         if (newCap != null) {
             newCap.setCold(0f);
+        }
+
+        // Немедленно синхронизируем клиент, чтобы шкала исчезла сразу
+        if (event.getEntityPlayer() instanceof EntityPlayerMP) {
+            BlizzardManager.NETWORK.sendTo(
+                    new ClientPacketHandlerCold.Packet(0f),
+                    (EntityPlayerMP) event.getEntityPlayer()
+            );
         }
     }
 }
