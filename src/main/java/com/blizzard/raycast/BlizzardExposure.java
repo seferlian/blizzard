@@ -47,14 +47,16 @@ public final class BlizzardExposure {
         public long     lastTick;
         public float    skySmoothed;
         public float    openSmoothed;
+
+        /** Целевые значения (результат рейкастов). */
+        public float    targetSky;
+        public float    targetOpen;
+
         public boolean  initialized;
 
-        // последнее отправленное клиенту — для «слать при изменении»
         public float lastSentSky  = -1f;
         public float lastSentOpen = -1f;
-        /** Тик, на котором последний раз отправляли пакет (для периодической синхронизации таймера). */
         public long  lastSentTick = Long.MIN_VALUE;
-
     }
 
     private static final Map<UUID, Entry> CACHE = new HashMap<>();
@@ -118,26 +120,48 @@ public final class BlizzardExposure {
         boolean moved = e.lastPos == null
                 || player.getPosition().distanceSq(e.lastPos) > 1;
 
-        // Движущийся игрок — раз в UPDATE_EVERY тиков;
-        // стоящий — раз в 20 (окружение не меняется).
+        // 1. РЕЙКАСТЫ (редко)
         long interval = moved ? UPDATE_EVERY : 20;
-        if (now - e.lastTick < interval) return;
+        if (now - e.lastTick >= interval) {
+            e.lastPos = player.getPosition();
+            e.lastTick = now;
 
-        e.lastPos = player.getPosition();
-        e.lastTick = now;
+            Vec3d eye = player.getPositionEyes(1.0f);
+            float rawSky  = castCone(world, eye, RAYS_SKY, RADIUS_SKY, SKY_CONE_DEG);
+            float rawOpen = castSphere(world, eye, RAYS_SPHERE, RADIUS_SPHERE);
 
-        Vec3d eye = player.getPositionEyes(1.0f);
+            if (!e.initialized) {
+                e.skySmoothed  = rawSky;
+                e.openSmoothed = rawOpen;
+                e.targetSky    = rawSky;
+                e.targetOpen   = rawOpen;
+                e.initialized  = true;
+            } else {
+                // Обновляем цель
+                e.targetSky  = rawSky;
+                e.targetOpen = rawOpen;
+            }
+        }
 
-        float rawSky  = castCone(world, eye, RAYS_SKY, RADIUS_SKY, SKY_CONE_DEG);
-        float rawOpen = castSphere(world, eye, RAYS_SPHERE, RADIUS_SPHERE);
+        // 2. ПЛАВНОЕ ДВИЖЕНИЕ К ЦЕЛИ (каждый тик)
+        // Если цель далеко (например, вышли из пещеры), движемся к ней
+        // фиксированным шагом, чтобы на клиент уходили плавные значения каждый тик.
+        if (e.initialized) {
+            // Шаг за тик. При 20 тиках в секунду (1 сек = 20 тиков)
+            // полный переход (от 0 до 1) займет 1 секунду (0.05f * 20).
+            float step = 0.05f;
 
-        if (!e.initialized) {
-            e.skySmoothed  = rawSky;
-            e.openSmoothed = rawOpen;
-            e.initialized  = true;
-        } else {
-            e.skySmoothed  = e.skySmoothed  * (1f - EMA) + rawSky  * EMA;
-            e.openSmoothed = e.openSmoothed * (1f - EMA) + rawOpen * EMA;
+            if (e.skySmoothed < e.targetSky) {
+                e.skySmoothed = Math.min(e.targetSky, e.skySmoothed + step);
+            } else if (e.skySmoothed > e.targetSky) {
+                e.skySmoothed = Math.max(e.targetSky, e.skySmoothed - step);
+            }
+
+            if (e.openSmoothed < e.targetOpen) {
+                e.openSmoothed = Math.min(e.targetOpen, e.openSmoothed + step);
+            } else if (e.openSmoothed > e.targetOpen) {
+                e.openSmoothed = Math.max(e.targetOpen, e.openSmoothed - step);
+            }
         }
     }
 

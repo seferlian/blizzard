@@ -38,6 +38,8 @@ import java.nio.IntBuffer;
  *   - копирует кадр в copyFramebuffer и глубину в depthTexture;
  *   - шейдер применяет туман по глубине и осветление неба;
  *   - сила эффекта плавно смешивается по blizzardStrength.
+ *   - Включает frame-rate-независимое сглаживание силы тумана,
+ *     чтобы туман не дёргался при ступенчатом обновлении exposure с сервера.
  *
  * Всё активируется только при blizzardStrength > 0.01F.
  */
@@ -87,6 +89,12 @@ public class BlizzardShader {
     /** Атлас снежинок 2×2 (4 варианта). */
     private static final ResourceLocation SNOWFLAKES_ATLAS =
             new ResourceLocation("blizzard:textures/environment/blizzard_snowflakes.png");
+
+    // ====== Сглаживание тумана ======
+    /** Текущее сглаженное значение силы тумана. */
+    private static float smoothedFogStrength = 0.0f;
+    /** Время последнего обновления сглаживания (наносекунды). */
+    private static long lastFogUpdateNano = 0;
 
     // ====== Шейдер ======
 
@@ -298,18 +306,6 @@ public class BlizzardShader {
                     double sx = l1 + offX + 0.5 + windShift;
                     double sz = k1 + offZ + 0.5 + windShift * 0.5;
 
-                    /*int rx = MathHelper.floor(sx);
-                    int rz = MathHelper.floor(sz);
-                    pos.setPos(rx, 0, rz);
-                    int j2 = world.getPrecipitationHeight(pos).getY();
-                    if (j2 <= 0) j2 = world.getHeight(rx, rz);
-                    if (j2 <= 0) j2 = (int) j;
-
-                    // Диапазон падения: от max(поверхность, игрок-10) до игрок+12
-                    double k2 = Math.max((double) j2, j - 10);
-                    double l2 = j + 12;
-                    if (k2 >= l2) continue;*/
-
                     // Высота поверхности в фактической (снесённой) точке
                     int rx = MathHelper.floor(sx);
                     int rz = MathHelper.floor(sz);
@@ -406,13 +402,25 @@ public class BlizzardShader {
      *
      * @param event событие RenderWorldLastEvent.
      */
+    /**
+     * Главный обработчик рендера: снежинки + шейдер.
+     * Вызывается каждый кадр после рендера мира, но до HUD.
+     *
+     * @param event событие RenderWorldLastEvent.
+     */
     @SubscribeEvent
     public void onRenderWorldLast(RenderWorldLastEvent event) {
         if (mc.player == null || mc.world == null) return;
 
-        // Сила метели на клиенте (0..1)
+        // Сила метели на клиенте (0..1). Приходит с пакетами каждый тик.
         float blizzardStrength = BlizzardReflection.getBlizzardStrength(mc.world);
-        if (blizzardStrength <= 0.01F) return;
+
+        // Если метель закончилась, сбрасываем накопленное сглаживание тумана
+        // и выходим, чтобы не рисовать лишнего.
+        if (blizzardStrength <= 0.01F) {
+            smoothedFogStrength = 0.0f;
+            return;
+        }
 
         float partialTicks = event.getPartialTicks();
 
@@ -517,15 +525,14 @@ public class BlizzardShader {
         setUniform1f(shaderProgram, "skyDesaturate", SKY_DESATURATE);
         setUniform1f(shaderProgram, "skyGray", SKY_GRAY);
 
-        // Сила тумана с учётом укрытия: в пещере остаётся FOG_SHELTER_FLOOR
-        // от полной силы, на открытом месте — полная.
+        // Сила тумана с учётом укрытия
         float exposure = BlizzardClientExposure.getExposure();
-        float fogStrength = blizzardStrength
-                * (FOG_SHELTER_FLOOR + (1f - FOG_SHELTER_FLOOR) * exposure);
+        float fogStrength = blizzardStrength * (FOG_SHELTER_FLOOR + (1f - FOG_SHELTER_FLOOR) * exposure);
 
-        // Динамический туман: при strength=0 — 60 блоков, при strength=1 — 6 блоков
+        // Динамический туман
         float dynamicFogStart = 3.0f - (3.0f - 0.5f) * fogStrength;
         float dynamicFogEnd   = 60.0f - (60.0f - 6.0f) * fogStrength;
+
         setUniform1f(shaderProgram, "fogStart", dynamicFogStart);
         setUniform1f(shaderProgram, "fogEnd", dynamicFogEnd);
         setUniform1f(shaderProgram, "fogCurve", FOG_CURVE);

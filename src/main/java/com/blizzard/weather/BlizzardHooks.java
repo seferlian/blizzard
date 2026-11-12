@@ -84,6 +84,27 @@ public class BlizzardHooks {
     private static final java.util.Map<java.util.UUID, Long> LAST_DEBUG =
             new java.util.HashMap<>();
 
+    // ==================== HUD ====================
+
+    /** Верхняя граница правой колонки HUD (голод/воздух) в экранных координатах. */
+    private static int hudRightTopY = 0;
+
+    /** Возвращает верхнюю границу правой колонки HUD. */
+    public static int getHudRightTopY() {
+        return hudRightTopY;
+    }
+
+    /**
+     * Вызывается из ASM-хука в конец GuiIngameForge.renderAir(int width, int height).
+     * Сохраняет верхнюю границу правой колонки HUD для HUD-оверлея холода.
+     *
+     * @param width  ширина экрана (scaled);
+     * @param height высота экрана (scaled).
+     */
+    public static void onRenderAirHud(int width, int height) {
+        hudRightTopY = height - net.minecraftforge.client.GuiIngameForge.right_height;
+    }
+
     /** Отправляет игроку в чат проценты открытости. */
     private static void sendDebugToChat(net.minecraft.entity.player.EntityPlayerMP p,
                                         float sky, float open, int time, float strength) {
@@ -203,9 +224,9 @@ public class BlizzardHooks {
      * Если метель не активна — детект смены ванильной погоды и возможный авто-старт.
      *
      * Во время метели раз в тик обновляется экспозиция каждого игрока
-     * и рассылается пакет:
-     *   - сразу, если exposure изменился сильнее SEND_THRESHOLD;
-     *   - иначе раз в 20 тиков для синхронизации таймера на клиенте.
+     * и рассылается пакет. Пакет отправляется КАЖДЫЙ тик, так как
+     * BlizzardExposure плавно сглаживает sky и open каждый тик (фиксированным шагом).
+     * Это гарантирует, что клиент получит идеально плавный поток данных.
      *
      * @param world серверный мир.
      */
@@ -213,8 +234,10 @@ public class BlizzardHooks {
         // Только сервер, только Overworld
         if (world.isRemote) return;
         if (world.provider.getDimension() != 0) return;
+
         // Запоминаем связь WorldInfo → World для writeNBT
         registerWorldInfo(world);
+
         // Восстанавливаем метель из NBT (один раз после загрузки мира)
         restoreIfNeeded(world);
 
@@ -223,6 +246,7 @@ public class BlizzardHooks {
             // Тикаем таймер метели
             int time = BlizzardReflection.getBlizzardTime(world) - 1;
             BlizzardReflection.setBlizzardTime(world, time);
+
             // Плавно двигаем силу: target = 1.0 пока time > 0, иначе 0.0
             float current = BlizzardReflection.getBlizzardStrength(world);
             float target  = (time > 0) ? 1.0F : 0.0F;
@@ -232,6 +256,7 @@ public class BlizzardHooks {
 
             BlizzardReflection.setPrevBlizzardStrength(world, BlizzardReflection.getBlizzardStrength(world));
             BlizzardReflection.setBlizzardStrength(world, current);
+
             // Плавно гасим дождь/грозу, пока идёт метель
             world.prevRainingStrength     = world.rainingStrength;
             world.prevThunderingStrength  = world.thunderingStrength;
@@ -248,29 +273,25 @@ public class BlizzardHooks {
                     EntityPlayerMP mp = (EntityPlayerMP) p;
                     if (mp.isSpectator() || mp.isDead) continue;
 
+                    // Обновляем экспозицию (внутри она плавно сдвигается к цели каждый тик)
                     BlizzardExposure.tick(mp, ws);
-                    BlizzardExposure.Entry entry = BlizzardExposure.getEntry(mp);
 
+                    // Получаем уже сглаженные значения
                     float sky  = BlizzardExposure.getSkyExposure(mp);
                     float open = BlizzardExposure.getOpenness(mp);
 
-                    // Exposure изменился сильнее порога — шлём сразу.
-                    // Иначе — раз в 20 тиков, чтобы клиент обновлял таймер.
-                    boolean exposureChanged =
-                            entry.lastSentSky < 0f
-                                    || Math.abs(sky  - entry.lastSentSky)  > BlizzardExposure.SEND_THRESHOLD
-                                    || Math.abs(open - entry.lastSentOpen) > BlizzardExposure.SEND_THRESHOLD;
+                    // Отправляем пакет КАЖДЫЙ тик.
+                    // Благодаря плавному движению sky и open на сервере (шаг 0.05),
+                    // клиент получает поток плавно меняющихся данных 20 раз в секунду.
+                    // Сетевая нагрузка ничтожна (~20 байт * 20 тиков = 400 байт/сек на игрока).
+                    BlizzardManager.NETWORK.sendTo(
+                            new PacketBlizzard(true, time, current, sky, open), mp);
 
-                    boolean timerSync = now - entry.lastSentTick >= 20;
-
-                    if (exposureChanged || timerSync) {
-                        BlizzardManager.NETWORK.sendTo(
-                                new PacketBlizzard(true, time, current, sky, open), mp);
-
-                        entry.lastSentSky  = sky;
-                        entry.lastSentOpen = open;
-                        entry.lastSentTick = now;
-                    }
+                    // Обновляем lastSent (хоть мы и шлем каждый тик, эти поля могут пригодиться в будущем)
+                    BlizzardExposure.Entry entry = BlizzardExposure.getEntry(mp);
+                    entry.lastSentSky  = sky;
+                    entry.lastSentOpen = open;
+                    entry.lastSentTick = now;
 
                     // ===== Отладка в чат раз в секунду =====
                     sendDebugToChat(mp, sky, open, time, current);

@@ -38,6 +38,7 @@ public class BlizzardClassTransformer implements IClassTransformer {
     private static final String CLS_WORLD_SERVER = "net/minecraft/world/WorldServer";
     private static final String CLS_WORLD_CLIENT = "net/minecraft/client/multiplayer/WorldClient";
     private static final String CLS_WORLD_INFO   = "net/minecraft/world/storage/WorldInfo";
+    private static final String CLS_GUI_INGAME_FORGE = "net/minecraftforge/client/GuiIngameForge";
 
     // ============ Дескрипторы BlizzardHooks (Object-версии) ============
     // Используем Object, потому что BlizzardHooks ремапится в prod (Notch),
@@ -88,6 +89,12 @@ public class BlizzardClassTransformer implements IClassTransformer {
                 if (DEBUG) System.out.println("[Blizzard ASM] >>> Patching WorldClient DONE");
                 return result;
             }
+
+
+            if (transformedName.equals("net.minecraftforge.client.GuiIngameForge")) {
+                return patchGuiIngameForge(basicClass);
+            }
+
         } catch (Throwable t) {
             System.err.println("[Blizzard ASM] !!! EXCEPTION while patching " + transformedName);
             t.printStackTrace();
@@ -349,6 +356,36 @@ public class BlizzardClassTransformer implements IClassTransformer {
             System.out.println("[Blizzard ASM] WARNING: no isRaining/isThundering hooked");
         }
     }
+
+
+    private byte[] patchGuiIngameForge(byte[] basicClass) {
+        ClassNode cn = new ClassNode();
+        new ClassReader(basicClass).accept(cn, 0);
+
+        // Патчим renderAir(int, int) — последний правый элемент HUD
+        for (MethodNode m : cn.methods) {
+            if (!m.name.equals("renderAir")) continue;
+            if (!m.desc.equals("(II)V")) continue;
+
+            // В конец метода: BlizzardHooks.onRenderAirHud(width, height)
+            // но нужны локальные переменные width/height.
+            // В renderAir они: int width (local 1), int height (local 2).
+            // Вставляем перед последним RETURN:
+            InsnList insns = new InsnList();
+            insns.add(new VarInsnNode(ILOAD, 1)); // width
+            insns.add(new VarInsnNode(ILOAD, 2)); // height
+            insns.add(new MethodInsnNode(INVOKESTATIC,
+                    "com/blizzard/weather/BlizzardHooks",
+                    "onRenderAirHud",
+                    "(II)V", false));
+            insertBeforeLastReturn(m, insns);
+        }
+
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS | ClassWriter.COMPUTE_FRAMES);
+        cn.accept(cw);
+        return cw.toByteArray();
+    }
+
 
     /** Проверяет, совпадает ли имя метода с одним из заданных. */
     private boolean matchesAnyName(MethodNode m, String[] names) {

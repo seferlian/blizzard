@@ -1,6 +1,7 @@
 package com.blizzard.client;
 
 import com.blizzard.client.BlizzardClientCold;
+import com.blizzard.weather.BlizzardHooks;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.ScaledResolution;
 import net.minecraft.client.renderer.BufferBuilder;
@@ -16,17 +17,8 @@ import net.minecraftforge.fml.relauncher.SideOnly;
 /**
  * HUD-оверлей накопленного холода.
  *
- * Текстура: blizzard:textures/gui/cold.png — 447×98.
- *
- * Координаты в текстуре (пиксели):
- *   Рамка:        (0, 0)   – (440, 47)   w=440 h=47
- *   Пустая шкала: (34, 12) – (405, 37)   w=371 h=25
- *   Заполненная:  (34, 62) – (405, 87)   w=371 h=25
- *
- * Порядок отрисовки:
- *   1. Рамка (всегда при cold > 0)
- *   2. Пустая шкала (внутри рамки)
- *   3. Заполненная шкала (поверх пустой, обрезка по cold слева направо)
+ * Текстура cold.png — 447×98 (или 440×98).
+ * Логические размеры рамки — 440×47, заполненной полоски — 371×25.
  */
 @SideOnly(Side.CLIENT)
 public class BlizzardColdHud {
@@ -34,24 +26,29 @@ public class BlizzardColdHud {
     private static final ResourceLocation TEXTURE =
             new ResourceLocation("blizzard", "textures/gui/cold.png");
 
-    /** Реальный размер cold.png в пикселях. */
+    /** Реальный размер файла cold.png в пикселях. */
     private static final int TEX_W = 447;
     private static final int TEX_H = 98;
 
     // ===== Координаты в текстуре =====
+    /** Рамка (целиком). */
     private static final int FRAME_X = 0,  FRAME_Y = 0,  FRAME_W = 440, FRAME_H = 47;
+
+    /** Область, где должна отображаться шкала (внутри рамки). */
     private static final int EMPTY_X = 34, EMPTY_Y = 12, EMPTY_W = 371, EMPTY_H = 25;
+
+    /** Заполненная шкала (источник текстуры, нижняя половина). */
     private static final int FULL_X  = 34, FULL_Y  = 62, FULL_W  = 371, FULL_H  = 25;
 
     // ===== Размер на экране =====
-    /** Ширина как у хотбара (182). */
+    /** Ширина как у хотбара (182), уменьшено вдвое. */
     private static final int WIDTH = 91;
-    /** Пропорционально 440:47 → 182:19. */
-    private static final int HEIGHT = 9;
+    /** Пропорционально 440:47 → 91:9.7 → 10. */
+    private static final int HEIGHT = 10;
 
     @SubscribeEvent
     public void onRenderOverlay(RenderGameOverlayEvent.Post event) {
-        if (event.getType() != RenderGameOverlayEvent.ElementType.HOTBAR) return;
+        if (event.getType() != RenderGameOverlayEvent.ElementType.ALL) return;
 
         Minecraft mc = Minecraft.getMinecraft();
         if (mc.player == null) return;
@@ -63,11 +60,23 @@ public class BlizzardColdHud {
         int screenW = sr.getScaledWidth();
         int screenH = sr.getScaledHeight();
 
-        int x = screenW / 2 - 91;
-        int y = screenH - 32 - HEIGHT - 2;
+        // Верх правой колонки HUD (голод/воздух), полученный из ASM-хука.
+        // Если ASM-хук не сработал, используем фолбэк (над голодом).
+        int baseY = BlizzardHooks.getHudRightTopY();
+        if (baseY <= 0) {
+            baseY = screenH - 39;
+        }
 
-        float kx = WIDTH  / (float) FRAME_W;   // 182 / 440
-        float ky = HEIGHT / (float) FRAME_H;   // 19 / 47
+        // Выравниваем по правому краю хотбара (где заканчивается голод)
+        int hungerRightEdge = screenW / 2 + 91;
+        int x = hungerRightEdge - WIDTH + 3;
+
+        // Позиция шкалы: ровно над голодом/пузырьками.
+        int y = baseY - HEIGHT + 10 - 2;
+
+        // Коэффициенты масштабирования
+        float kx = WIDTH  / (float) FRAME_W;   // 91 / 440
+        float ky = HEIGHT / (float) FRAME_H;   // 10 / 47
 
         GlStateManager.enableTexture2D();
         GlStateManager.enableBlend();
@@ -79,23 +88,29 @@ public class BlizzardColdHud {
         GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
         mc.getTextureManager().bindTexture(TEXTURE);
 
-        // ===== 1. Рамка (внутри неё уже нарисована пустая шкала) =====
+        // ===== 1. Рамка (рисуется целиком 440x47) =====
         drawTex(x, y, WIDTH, HEIGHT,
                 FRAME_X, FRAME_Y, FRAME_W, FRAME_H);
 
-        // ===== 2. Заполнение поверх области (34,12)–(405,37) =====
-        // Экранная позиция — из EMPTY_X/EMPTY_Y (внутри рамки).
-        // Текстура — из FULL_X/FULL_Y (нижняя половина cold.png).
+        // ===== 2. Пустая шкала (рисуется на месте 34,12 - 405,37) =====
         int barScreenX = x + (int) (EMPTY_X * kx);
         int barScreenY = y + (int) (EMPTY_Y * ky);
         int barScreenW = (int) (EMPTY_W * kx);
         int barScreenH = (int) (EMPTY_H * ky);
 
+        drawTex(barScreenX, barScreenY, barScreenW, barScreenH,
+                EMPTY_X, EMPTY_Y, EMPTY_W, EMPTY_H);
+
+        // ===== 3. Заполненная шкала (берем из 34,62 - 405,87) =====
         int fillScreenW = (int) (barScreenW * cold);
         if (fillScreenW > 0) {
+            // Сколько текселей заполненной шкалы взять пропорционально заливке
             int fillTexW = (int) ((float) fillScreenW / barScreenW * FULL_W);
 
-            drawTex(barScreenX, barScreenY, fillScreenW, barScreenH,
+            // Сдвигаем заполненную шкалу на 1 пиксель вниз по сравнению с пустой
+            int fillScreenY = barScreenY + 1;
+
+            drawTex(barScreenX, fillScreenY, fillScreenW, barScreenH,
                     FULL_X, FULL_Y, fillTexW, FULL_H);
         }
 
@@ -104,15 +119,6 @@ public class BlizzardColdHud {
 
     /**
      * Рисует часть текстуры в экранный прямоугольник.
-     *
-     * @param x   экранный X
-     * @param y   экранный Y
-     * @param w   ширина на экране
-     * @param h   высота на экране
-     * @param tx  левый X в текстуре (пиксели)
-     * @param ty  верхний Y в текстуре (пиксели)
-     * @param tw  ширина в текстуре (пиксели)
-     * @param th  высота в текстуре (пиксели)
      */
     private static void drawTex(int x, int y, int w, int h,
                                 int tx, int ty, int tw, int th) {
