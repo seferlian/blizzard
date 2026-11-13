@@ -1,5 +1,6 @@
 package com.blizzard.client;
 
+import com.blizzard.config.ConfigHandler;
 import com.blizzard.raycast.BlizzardClientExposure;
 import com.blizzard.weather.BlizzardReflection;
 import net.minecraft.client.Minecraft;
@@ -66,20 +67,11 @@ public class BlizzardShader {
 
     // ====== Настройки визуала ======
 
-    /** Кривая тумана: 1.0 — линейно, 0.8 — быстрее к белому, 1.2 — медленнее. */
-    public static float FOG_CURVE = 1.0f;
-
-    /** Насколько сильно белит небо (0..1). */
-    public static float SKY_WHITEN = 0.2f;
-
-    /** Десатурация неба (0..1). 0 — цвет как есть, 1 — полностью серый. */
-    public static float SKY_DESATURATE = 0.55f;
-
-    /** Смещение неба к серому (0..1). 0 — цвет как есть, 1 — средний серый. */
-    public static float SKY_GRAY = 0.4f;
-
-    /** Доля силы тумана, остающаяся в полном укрытии (0 — ничего, 1 — как на поле). */
-    private static final float FOG_SHELTER_FLOOR = 0.2f;
+    private static float getFogShelterFloor() { return (float) ConfigHandler.visual.fogShelterFloor; }
+    private static float getFogStartMin() { return (float) ConfigHandler.visual.fogStartMin; }
+    private static float getFogStartMax() { return (float) ConfigHandler.visual.fogStartMax; }
+    private static float getFogEndMin() { return (float) ConfigHandler.visual.fogEndMin; }
+    private static float getFogEndMax() { return (float) ConfigHandler.visual.fogEndMax; }
 
     /** Цвет тумана (белый). */
     private static final float FOG_R = 1.0f;
@@ -228,13 +220,13 @@ public class BlizzardShader {
         if (entity == null) return;
 
         // ====== Параметры рендера ======
-        final int radius = 12;                                                 // радиус спавна в блоках
-        final int quadsPerChunk = Math.max(1, (int)(6 * blizzardStrength));    // квадов на блок
-        final float halfSize = 0.087F * blizzardStrength;                      // половина размера снежинки
-        final float alpha = blizzardStrength;                                  // прозрачность
-        final int fallCycle = 20;                                              // тиков на полный цикл падения
-        final double windMultiplier = 6.0;                                     // снос по X за цикл (блоков)
-        final double tileSize = 0.5;                                           // 1/2 атласа (2x2)
+        final int radius = ConfigHandler.visual.snowRadius;                                                        // радиус спавна в блоках
+        final int quadsPerChunk = Math.max(1, (int)(ConfigHandler.visual.snowQuadsPerBlock * blizzardStrength));   // квадов на блок
+        final float halfSize = (float)ConfigHandler.visual.snowSize * blizzardStrength;                            // половина размера снежинки
+        final float alpha = blizzardStrength;                                                                      // прозрачность
+        final int fallCycle = 20;                                                                                  // тиков на полный цикл падения
+        final double windMultiplier = ConfigHandler.visual.snowWindMultiplier;                                     // снос по X за цикл (блоков)
+        final double tileSize = 0.5;                                                                               // 1/2 атласа (2x2)
 
         int i = MathHelper.floor(entity.posX);
         int k = MathHelper.floor(entity.posZ);
@@ -322,14 +314,26 @@ public class BlizzardShader {
                     if (j2Spawn <= 0) j2Spawn = world.getHeight(sx0, sz0);
                     if (j2Spawn <= 0) j2Spawn = (int) j;
 
-                    // Низ траектории — не ниже поверхности ни в спавне, ни в текущей точке.
+
+
+                    /*// Низ траектории — не ниже поверхности ни в спавне, ни в текущей точке.
                     // Это не даёт снежинке опуститься ниже крыши/стены снесённого столбца.
                     double k2 = Math.max((double) Math.max(j2, j2Spawn), j - 10);
                     double l2 = j + 12;
                     if (k2 >= l2) continue;
 
                     double fallY = (l2 - k2) * (1.0 - fallProgress);
-                    double sy = k2 + offY * (l2 - k2) * 0.5 + fallY;
+                    double sy = k2 + offY * (l2 - k2) * 0.5 + fallY;*/
+
+                    double fallTop = j + 12;
+                    double fallBottom = j - 10;
+                    double span = fallTop - fallBottom;
+
+                    double floorY = Math.max((double) Math.max(j2, j2Spawn), fallBottom);
+                    if (floorY >= fallTop) continue;
+
+                    double sy = fallBottom + span * (1.0 - fallProgress) + offY * 0.5;
+                    if (sy <= floorY) continue;   // касание поверхности — смерть, без скольжения
 
                     // Отсечение снежинок за камерой
                     double vx = sx - camX;
@@ -522,21 +526,21 @@ public class BlizzardShader {
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, depthTexture);
 
         // Настройки шейдера
-        setUniform1f(shaderProgram, "skyDesaturate", SKY_DESATURATE);
-        setUniform1f(shaderProgram, "skyGray", SKY_GRAY);
+        setUniform1f(shaderProgram, "skyDesaturate", (float) ConfigHandler.visual.skyDesaturate);
+        setUniform1f(shaderProgram, "skyGray", (float) ConfigHandler.visual.skyGray);
 
         // Сила тумана с учётом укрытия
         float exposure = BlizzardClientExposure.getExposure();
-        float fogStrength = blizzardStrength * (FOG_SHELTER_FLOOR + (1f - FOG_SHELTER_FLOOR) * exposure);
+        float fogStrength = blizzardStrength * (getFogShelterFloor() + (1f - getFogShelterFloor()) * exposure);
 
         // Динамический туман
-        float dynamicFogStart = 3.0f - (3.0f - 0.5f) * fogStrength;
-        float dynamicFogEnd   = 60.0f - (60.0f - 6.0f) * fogStrength;
+        float dynamicFogStart = getFogStartMax() - (getFogStartMax() - getFogStartMin()) * fogStrength;
+        float dynamicFogEnd   = getFogEndMax() - (getFogEndMax() - getFogEndMin()) * fogStrength;
 
         setUniform1f(shaderProgram, "fogStart", dynamicFogStart);
         setUniform1f(shaderProgram, "fogEnd", dynamicFogEnd);
-        setUniform1f(shaderProgram, "fogCurve", FOG_CURVE);
-        setUniform1f(shaderProgram, "skyWhiten", SKY_WHITEN);
+        setUniform1f(shaderProgram, "fogCurve", (float) ConfigHandler.visual.fogCurve);
+        setUniform1f(shaderProgram, "skyWhiten", (float) ConfigHandler.visual.skyWhiten);
         setUniform1f(shaderProgram, "blizzardStrength", blizzardStrength);
         setUniform3f(shaderProgram, "fogColor", FOG_R, FOG_G, FOG_B);
         setUniform1f(shaderProgram, "projNear", projNear);

@@ -14,6 +14,7 @@ import com.blizzard.weather.BlizzardPlayerHandler;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.SoundEvent;
 import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.common.config.ConfigManager;
 import net.minecraftforge.fml.common.FMLCommonHandler;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.Mod.EventHandler;
@@ -32,6 +33,7 @@ public class Main {
 
     @EventHandler
     public void preInit(FMLPreInitializationEvent event) {
+        ConfigManager.sync(Tags.MODID, net.minecraftforge.common.config.Config.Type.INSTANCE);//регистрация конфига
         ResourceLocation loc = new ResourceLocation("blizzard", "ambient.blizzard_wind");
         BLIZZARD_WIND = new SoundEvent(loc).setRegistryName(loc);
         ForgeRegistries.SOUND_EVENTS.register(BLIZZARD_WIND);

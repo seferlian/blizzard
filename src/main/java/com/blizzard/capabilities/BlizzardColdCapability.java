@@ -1,5 +1,6 @@
 package com.blizzard.capabilities;
 
+import com.blizzard.config.ConfigHandler;
 import com.blizzard.damage.BlizzardDamageSource;
 import com.blizzard.raycast.BlizzardExposure;
 import com.blizzard.weather.BlizzardManager;
@@ -28,15 +29,14 @@ import java.util.concurrent.ThreadLocalRandom;
 public class BlizzardColdCapability {
 
     /** Порог exposure, ниже которого холод убывает, а не растёт. */
-    public static final float EXPOSURE_THRESHOLD = 0.05f;
+    private static float getExposureThreshold() { return (float) ConfigHandler.cold.exposureThreshold; }
 
-    // ======================== ПАРАМЕТРЫ (КАНДИДАТЫ В КОНФИГ) ========================
 
     /**
      * Базовая скорость накопления холода за 1 тик (без брони).
      * 1.0f / 1200.0f = полное заполнение шкалы за 60 секунд (1 минуту).
      */
-    private static final float COLD_GAIN_PER_TICK = 1.0f / (60 * 20);
+    private static float getColdGainPerTick() { return (float) ConfigHandler.cold.coldGainPerTick; }
 
     /**
      * Насколько снижается скорость накопления за КАЖДУЮ надетую деталь брони.
@@ -44,12 +44,12 @@ public class BlizzardColdCapability {
      * Если надеть все 4 детали, замедление будет 60% (скорость упадёт до 40%).
      * При 0.25f (4 детали = 100%) броня будет давать полную защиту (холод не растёт).
      */
-    private static final float ARMOR_SLOT_SLOWDOWN = 0.15f;
+    private static float getArmorSlotSlowdown() { return (float) ConfigHandler.cold.armorSlotSlowdown; }
 
     /**
      * Скорость убывания при отсутствии метели (полный сброс за ~60 секунд).
      */
-    private static final float DRAIN_PER_TICK = 1.0f / (60 * 20);
+    private static float getDrainPerTick() { return (float) ConfigHandler.cold.drainPerTick; }
 
     /** Интервал синхронизации с клиентом. */
     private static final int SYNC_INTERVAL = 20;
@@ -57,23 +57,28 @@ public class BlizzardColdCapability {
     // ======================== УРОН (КАНДИДАТЫ В КОНФИГ) ========================
 
     /** Cold, при котором начинается урон. */
-    private static final float DAMAGE_START_COLD = 0.2f;
+    private static float getDamageStartCold() { return (float) ConfigHandler.blizzard.damageStartCold; }
 
     /** Cold, при котором достигается максимум. */
-    private static final float DAMAGE_END_COLD = 1.0f;
+    private static float getDamageEndCold() { return (float) ConfigHandler.blizzard.damageEndCold; }
 
     /** Урон за удар при cold = DAMAGE_START_COLD. */
-    private static final float DAMAGE_MIN = 0.5f;
+    private static float getDamageMin() { return (float) ConfigHandler.blizzard.damageMin; }
 
     /** Урон за удар при cold = DAMAGE_END_COLD. */
-    private static final float DAMAGE_MAX = 8.0f;
+    private static float getDamageMax() { return (float) ConfigHandler.blizzard.damageMax; }
 
     /** Интервал между ударами в тиках при cold = DAMAGE_START_COLD. */
-    private static final int INTERVAL_MAX = 100;
+    private static int getIntervalMax() { return ConfigHandler.blizzard.intervalMax; }
 
     /** Интервал между ударами в тиках при cold = DAMAGE_END_COLD. */
-    private static final int INTERVAL_MIN = 10;
+    private static int getIntervalMin() { return ConfigHandler.blizzard.intervalMin; }
 
+    /** Множитель урона в воде*/
+    private static float getWaterMultiplier() { return (float) ConfigHandler.cold.waterMultiplier; }
+
+    /** Интервал между ударами в тиках, когда игрок в воде. */
+    private static int getIntervalWater() { return ConfigHandler.cold.intervalWater; }
     // ======================== ПОЛЯ ========================
 
     /** Тик, на котором последний раз наносили урон. */
@@ -132,7 +137,7 @@ public class BlizzardColdCapability {
 
         // Вне Overworld холод не накапливается, но и не сбрасывается мгновенно
         if (player.world.provider.getDimension() != 0) {
-            this.cold = Math.max(0f, this.cold - DRAIN_PER_TICK);
+            this.cold = Math.max(0f, this.cold - getDrainPerTick());
             this.scheduleSync(player);
             this.tick++;
             return;
@@ -151,12 +156,12 @@ public class BlizzardColdCapability {
             // и при достаточной открытости
             boolean fullStrength = strength >= 0.999f;
 
-            if (fullStrength && exposure > EXPOSURE_THRESHOLD) {
-                float norm = (exposure - EXPOSURE_THRESHOLD) / (1f - EXPOSURE_THRESHOLD);
+            if (fullStrength && exposure > getExposureThreshold()) {
+                float norm = (exposure - getExposureThreshold()) / (1f - getExposureThreshold());
 
                 // 1. Броня
                 int armorPieces = countArmorPieces(player);
-                float armorSlowdown = Math.min(1.0f, armorPieces * ARMOR_SLOT_SLOWDOWN);
+                float armorSlowdown = Math.min(1.0f, armorPieces * getArmorSlotSlowdown());
                 float multiplier = 1.0f - armorSlowdown;
 
                 // 2. Тепло от огня/факелов
@@ -165,22 +170,22 @@ public class BlizzardColdCapability {
 
                 // 3. Вода (если применяется)
                 if (player.isInWater()) {
-                    multiplier *= 2.0f;
+                    multiplier *= (float) getWaterMultiplier();
                 }
 
-                this.cold += (COLD_GAIN_PER_TICK * norm) * multiplier;
+                this.cold += (getColdGainPerTick() * norm) * multiplier;
 
             } else {
-                this.cold -= DRAIN_PER_TICK;
+                this.cold -= getDrainPerTick();
             }
         } else {
-            this.cold -= DRAIN_PER_TICK;
+            this.cold -= getDrainPerTick();
         }
 
         this.cold = clamp01(this.cold);
 
         // Урон (только во время метели и только если cold дошёл до порога)
-        if (blizzard && this.cold >= DAMAGE_START_COLD) {
+        if (blizzard && this.cold >= getDamageStartCold()) {
             this.applyColdDamage(player);
         }
 
@@ -222,20 +227,20 @@ public class BlizzardColdCapability {
         boolean inWater = player.isInWater();
 
         // t ∈ [0, 1] — насколько cold продвинулся от начала до конца шкалы
-        float t = (this.cold - DAMAGE_START_COLD) / (DAMAGE_END_COLD - DAMAGE_START_COLD);
+        float t = (this.cold - getDamageStartCold()) / (getDamageEndCold() - getDamageStartCold());
         if (t < 0f) t = 0f;
         if (t > 1f) t = 1f;
 
         // Считаем интервал
         int interval;
         if (inWater) {
-            // В воде интервал всегда минимальный (максимальная частота)
-            interval = INTERVAL_MIN;
+            // В воде интервал берется из конфига (по умолчанию 10 тиков)
+            interval = getIntervalWater();
         } else {
-            interval = (int) (INTERVAL_MAX + (INTERVAL_MIN - INTERVAL_MAX) * t);
+            interval = (int) (getIntervalMax() + (getIntervalMin() - getIntervalMax()) * t);
         }
 
-        float damage = DAMAGE_MIN + (DAMAGE_MAX - DAMAGE_MIN) * t;
+        float damage = getDamageMin() + (getDamageMax() - getDamageMin()) * t;
 
         long now = player.world.getTotalWorldTime();
         if (now - this.lastDamageTick >= interval) {

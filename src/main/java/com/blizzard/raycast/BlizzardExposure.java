@@ -1,5 +1,6 @@
 package com.blizzard.raycast;
 
+import com.blizzard.config.ConfigHandler;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockLiquid;
 import net.minecraft.block.state.IBlockState;
@@ -28,7 +29,7 @@ import java.util.UUID;
  *
  * Дополнительно:
  *   - Детерминированный поиск источников тепла (факелы, огонь, лава)
- *     в радиусе MAX_HEAT_DISTANCE вокруг игрока. Это надёжнее и быстрее,
+ *     в радиусе getMaxHeatDistance() вокруг игрока. Это надёжнее и быстрее,
  *     чем рейкасты, так как не зависит от случайных направлений лучей.
  *   - Хранение найденных источников в Map для того, чтобы они не "мерцали"
  *     при каждом новом рейкасте.
@@ -40,15 +41,9 @@ public final class BlizzardExposure {
     private static final int    RAYS_SKY       = 12;
     private static final double SKY_CONE_DEG   = 35.0;
     private static final int    UPDATE_EVERY   = 4;
-    private static final float  EMA            = 0.25f;
     private static final double RADIUS_SPHERE = 16.0;
     private static final double RADIUS_SKY    = 32.0;
 
-    /** Порог изменения, при котором пакет шлётся немедленно (не ждём 4 тика). */
-    public static final float SEND_THRESHOLD = 0.15f;
-
-    /** Максимальное расстояние, на котором действует тепло от огня. */
-    private static final float MAX_HEAT_DISTANCE = 5.0f;
 
     private static final Random RNG = new Random();
 
@@ -194,7 +189,7 @@ public final class BlizzardExposure {
 
                 // Если игрок ушёл слишком далеко — удаляем
                 double distSq = eye.squareDistanceTo(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
-                if (distSq > MAX_HEAT_DISTANCE * MAX_HEAT_DISTANCE) {
+                if (distSq > getMaxHeatDistance() * getMaxHeatDistance()) {
                     it.remove();
                 }
             }
@@ -220,12 +215,12 @@ public final class BlizzardExposure {
 
     /**
      * Детерминированно ищет источники тепла в кубе вокруг игрока.
-     * Проходит по всем блокам в радиусе MAX_HEAT_DISTANCE (5 блоков).
+     * Проходит по всем блокам в радиусе getMaxHeatDistance() (5 блоков).
      *
      * Вызывается раз в UPDATE_EVERY или 20 тиков (не каждый тик).
      */
     private static void findHeatSources(World world, Vec3d eye, Entry e) {
-        int radius = (int) Math.ceil(MAX_HEAT_DISTANCE);
+        int radius = (int) Math.ceil(getMaxHeatDistance());
         int cx = (int) Math.floor(eye.x);
         int cy = (int) Math.floor(eye.y);
         int cz = (int) Math.floor(eye.z);
@@ -236,7 +231,7 @@ public final class BlizzardExposure {
             for (int dy = -radius; dy <= radius; dy++) {
                 for (int dz = -radius; dz <= radius; dz++) {
                     // Проверяем расстояние по квадрату (быстро, без sqrt)
-                    if (dx * dx + dy * dy + dz * dz > MAX_HEAT_DISTANCE * MAX_HEAT_DISTANCE) {
+                    if (dx * dx + dy * dy + dz * dz > getMaxHeatDistance() * getMaxHeatDistance()) {
                         continue;
                     }
 
@@ -283,10 +278,10 @@ public final class BlizzardExposure {
 
             // Расстояние от глаз до центра блока
             double dist = Math.sqrt(eye.squareDistanceTo(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5));
-            if (dist > MAX_HEAT_DISTANCE) continue;
+            if (dist > getMaxHeatDistance()) continue;
 
             // Коэффициент расстояния: 1.0 вплотную, 0.0 на максимальном расстоянии
-            float distFactor = 1.0f - ((float) dist / MAX_HEAT_DISTANCE);
+            float distFactor = 1.0f - ((float) dist / getMaxHeatDistance());
             totalHeatSum += strength * distFactor;
         }
 
@@ -304,11 +299,21 @@ public final class BlizzardExposure {
     private static float getHeatStrength(World world, BlockPos pos) {
         Block block = world.getBlockState(pos).getBlock();
 
-        if (block == Blocks.TORCH) return 0.05f;
-        if (block == Blocks.FIRE) return 0.15f;
-        if (block == Blocks.LAVA || block == Blocks.FLOWING_LAVA) return 0.25f;
+        float torch = (float) ConfigHandler.heat.heatTorch;
+        float fire = (float) ConfigHandler.heat.heatFire;
+        float lava = (float) ConfigHandler.heat.heatLava;
 
+        if (block == Blocks.TORCH) return torch;
+        if (block == Blocks.FIRE) return fire;
+        if (block == Blocks.LAVA || block == Blocks.FLOWING_LAVA) return lava;
         return 0f;
+    }
+
+    /**
+     * Берет дальность из конфига
+     */
+    private static float getMaxHeatDistance() {
+        return (float) ConfigHandler.heat.maxHeatDistance;
     }
 
 

@@ -1,5 +1,6 @@
 package com.blizzard.weather;
 
+import com.blizzard.config.ConfigHandler;
 import com.blizzard.raycast.BlizzardExposure;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.entity.player.EntityPlayerMP;
@@ -49,13 +50,13 @@ public class BlizzardHooks {
             Collections.synchronizedMap(new WeakHashMap<WorldInfo, World>());
 
     /** Шанс запуска метели при естественной смене погоды. */
-    private static final float BLIZZARD_CHANCE = 0.3F;
+    private static float getBlizzardChance() { return (float) ConfigHandler.blizzard.blizzardChance; }
 
     /** Минимальная длительность авто-метели (10 минут). */
-    private static final int MIN_DURATION = 10 * 60 * 20;
+    private static int getMinDuration() { return ConfigHandler.blizzard.minDuration; }
 
     /** Максимальная длительность авто-метели (30 минут). */
-    private static final int MAX_DURATION = 30 * 60 * 20;
+    private static int getMaxDuration() { return ConfigHandler.blizzard.maxDuration; }
 
     /** Общий генератор случайных чисел. */
     private static final Random RANDOM = new Random();
@@ -67,10 +68,10 @@ public class BlizzardHooks {
     private static final int FADE_TICKS = 10 * 20;
 
     /** Шаг нарастания силы за тик. */
-    private static final float GROW_DELTA = 1.0F / GROW_TICKS;
+    private static float getGrowDelta() { return 1.0F / ConfigHandler.blizzard.growTicks; }
 
     /** Шаг затухания силы за тик. */
-    private static final float FADE_DELTA = 1.0F / FADE_TICKS;
+    private static float getFadeDelta() { return 1.0F / ConfigHandler.blizzard.fadeTicks; }
 
     // ==================== Отладка ====================
 
@@ -243,16 +244,28 @@ public class BlizzardHooks {
 
         // ===== Метель активна =====
         if (BlizzardReflection.isBlizzard(world)) {
-            // Тикаем таймер метели
-            int time = BlizzardReflection.getBlizzardTime(world) - 1;
-            BlizzardReflection.setBlizzardTime(world, time);
+            // Проверяем, включен ли цикл погоды.
+            // Если doWeatherCycle = false, метель "застывает" и не заканчивается.
+            boolean doWeatherCycle = world.getGameRules().getBoolean("doWeatherCycle");
 
-            // Плавно двигаем силу: target = 1.0 пока time > 0, иначе 0.0
+            int time;
+            if (doWeatherCycle) {
+                // Тикаем таймер метели (обычное поведение)
+                time = BlizzardReflection.getBlizzardTime(world) - 1;
+                BlizzardReflection.setBlizzardTime(world, time);
+            } else {
+                // Цикл погоды отключён: таймер не уменьшается.
+                // Берём текущее значение (например, 5000 тиков) и не трогаем его.
+                time = BlizzardReflection.getBlizzardTime(world);
+            }
+
+            // Дальше идёт логика движения силы (она должна работать, чтобы
+            // метель плавно нарастала до 1.0 даже при отключенном цикле).
             float current = BlizzardReflection.getBlizzardStrength(world);
             float target  = (time > 0) ? 1.0F : 0.0F;
 
-            if (current < target) current = Math.min(target, current + GROW_DELTA);
-            else if (current > target) current = Math.max(target, current - FADE_DELTA);
+            if (current < target) current = Math.min(target, current + getGrowDelta());
+            else if (current > target) current = Math.max(target, current - getFadeDelta());
 
             BlizzardReflection.setPrevBlizzardStrength(world, BlizzardReflection.getBlizzardStrength(world));
             BlizzardReflection.setBlizzardStrength(world, current);
@@ -260,8 +273,8 @@ public class BlizzardHooks {
             // Плавно гасим дождь/грозу, пока идёт метель
             world.prevRainingStrength     = world.rainingStrength;
             world.prevThunderingStrength  = world.thunderingStrength;
-            world.rainingStrength    = Math.max(0.0F, world.rainingStrength    - FADE_DELTA * 2);
-            world.thunderingStrength = Math.max(0.0F, world.thunderingStrength - FADE_DELTA * 2);
+            world.rainingStrength    = Math.max(0.0F, world.rainingStrength    - getFadeDelta() * 2);
+            world.thunderingStrength = Math.max(0.0F, world.thunderingStrength - getFadeDelta() * 2);
 
             // ===== Экспозиция + адресная рассылка =====
             if (world instanceof WorldServer) {
@@ -335,8 +348,8 @@ public class BlizzardHooks {
         // Если смена — проверяем, разрешён ли запуск метели
         if (rainingChanged || thunderingChanged) {
             if (shouldAllowBlizzard(lastRaining, lastThundering, currentRaining, currentThundering)) {
-                if (RANDOM.nextFloat() < BLIZZARD_CHANCE) {
-                    int duration = MIN_DURATION + RANDOM.nextInt(MAX_DURATION - MIN_DURATION + 1);
+                if (RANDOM.nextFloat() < getBlizzardChance()) {
+                    int duration = getMinDuration() + RANDOM.nextInt(getMaxDuration() - getMinDuration() + 1);
                     startBlizzard(world, duration, "weather change");
                 }
             }
