@@ -226,6 +226,11 @@ public class ConfigHandler {
         @Config.Comment("На сколько блоков сносит снежинку за цикл падения. По умолчанию: 6.0")
         @Config.RangeDouble(min = 0.0, max = 32.0)
         public double snowWindMultiplier = 6.0;
+
+        @Config.Name("Цикл падения снежинки (тиков)")
+        @Config.Comment("За сколько тиков снежинка пролетает весь диапазон падения. Больше = медленнее. По умолчанию: 20")
+        @Config.RangeInt(min = 5, max = 200)
+        public int snowFallCycle = 20;
     }
 
     @Mod.EventBusSubscriber(modid = Tags.MODID)

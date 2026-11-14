@@ -1,7 +1,9 @@
 package com.blizzard.weather;
 
+import com.blizzard.client.BlizzardShader;
 import com.blizzard.config.ConfigHandler;
 import com.blizzard.raycast.BlizzardExposure;
+import net.minecraft.client.Minecraft;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.nbt.NBTTagCompound;
@@ -105,6 +107,8 @@ public class BlizzardHooks {
     public static void onRenderAirHud(int width, int height) {
         hudRightTopY = height - net.minecraftforge.client.GuiIngameForge.right_height;
     }
+
+
 
     /** Отправляет игроку в чат проценты открытости. */
     private static void sendDebugToChat(net.minecraft.entity.player.EntityPlayerMP p,
@@ -513,4 +517,37 @@ public class BlizzardHooks {
     public static void clearDebugFor(java.util.UUID id) {
         LAST_DEBUG.remove(id);
     }
+
+
+    /**
+     * Вызывается ASM-хуком из FinalPassRenderer.renderFinalPass().
+     * Принимает RenderTargets, чтобы достать depth-текстуру Pintonium.
+     */
+    public static void onIrisFinalPass(Object renderTargets) {
+        int depthTexId = -1;
+
+        try {
+            // Пытаемся получить getDepthTextureNoTranslucents
+            java.lang.reflect.Method m = renderTargets.getClass().getMethod("getDepthTextureNoTranslucents");
+            Object noTranslucents = m.invoke(renderTargets);
+
+            if (noTranslucents != null) {
+                // Пытаемся получить getTextureId
+                try {
+                    java.lang.reflect.Method getTextureId = noTranslucents.getClass().getMethod("getTextureId");
+                    depthTexId = (int) getTextureId.invoke(noTranslucents);
+                } catch (NoSuchMethodException e) {
+                    System.out.println("[Blizzard] DepthTexture has no getTextureId() method");
+                }
+            } else {
+                System.out.println("[Blizzard] getDepthTextureNoTranslucents() returned null");
+            }
+        } catch (Throwable t) {
+            System.out.println("[Blizzard] Failed to get depth texture: " + t.getMessage());
+            t.printStackTrace();
+        }
+
+        BlizzardShader.renderFromPintonium(depthTexId);
+    }
+
 }
