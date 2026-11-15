@@ -219,6 +219,16 @@ public class ConfigHandler {
         @Config.RangeDouble(min = 0.0, max = 1.0)
         public double skyGray = 0.4;
 
+        @Config.Name("Небо: конец интерполяции")
+        @Config.Comment("Доля projFar, где смешивание с небом достигает 1.0 (0.0–1.0). По умолчанию: 1.0")
+        @Config.RangeDouble(min = 0.0, max = 1.0)
+        public double skyInterpEnd = 0.8;
+
+        @Config.Name("Небо: кривая интерполяции")
+        @Config.Comment("1.0 — линейно, <1.0 — быстрее к небу, >1.0 — медленнее. По умолчанию: 1.0")
+        @Config.RangeDouble(min = 0.1, max = 5.0)
+        public double skyInterpCurve = 1.0;
+
         // ===== Снежинки =====
         @Config.Name("Радиус снежинок")
         @Config.Comment("Радиус спавна снежинок вокруг игрока в блоках. По умолчанию: 12")

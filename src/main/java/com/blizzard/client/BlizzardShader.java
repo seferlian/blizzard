@@ -120,14 +120,13 @@ public class BlizzardShader {
                     "uniform float fogStart;\n" +
                     "uniform float fogEnd;\n" +
                     "uniform float fogCurve;\n" +
-                    "uniform float skyWhiten;\n" +
-                    "uniform float skyDesaturate;\n" +
-                    "uniform float skyGray;\n" +
                     "uniform float blizzardStrength;\n" +
                     "uniform vec3 fogColor;\n" +
+                    "uniform vec3 skyColor;\n" +
                     "uniform float projNear;\n" +
                     "uniform float projFar;\n" +
-                    "uniform float dayFactor;\n" +
+                    "uniform float skyInterpEnd;\n" +
+                    "uniform float skyInterpCurve;\n" +
                     "\n" +
                     "float linearizeDepth(float depth) {\n" +
                     "    float z_n = 2.0 * depth - 1.0;\n" +
@@ -141,13 +140,12 @@ public class BlizzardShader {
                     "    \n" +
                     "    float d = linearizeDepth(rawDepth);\n" +
                     "    \n" +
-                    "    float skyFactor = step(projFar * 0.995, d);\n" +
-                    "    \n" +
-                    "    // dayFactor из Java (0 = ночь, 1 = день).\n" +
-                    "    float gray = dot(current.rgb, vec3(0.299, 0.587, 0.114));\n" +
-                    "    vec3 desaturated = mix(current.rgb, vec3(gray), skyDesaturate * dayFactor);\n" +
-                    "    vec3 grayed = mix(desaturated, vec3(0.5), skyGray * dayFactor);\n" +
-                    "    vec3 skyColor = mix(grayed, vec3(1.0), skyWhiten * dayFactor);\n" +
+                    "    // ★ skyFactor от fogEnd до projFar * skyInterpEnd.\n" +
+                    "    //   Сначала блок полностью в тумане (fogFactor = 1 на fogEnd),\n" +
+                    "    //   потом туман плавно переходит в небо (skyColor).\n" +
+                    "    //   Блок не смешивается с небом — только fogColor → skyColor.\n" +
+                    "    float skyFactor = smoothstep(fogEnd, projFar * skyInterpEnd, d);\n" +
+                    "    skyFactor = pow(skyFactor, skyInterpCurve);\n" +
                     "    \n" +
                     "    // Туман: цвет уже с учётом ночи (из Java).\n" +
                     "    float fogFactor = smoothstep(fogStart, fogEnd, d);\n" +
@@ -248,7 +246,7 @@ public class BlizzardShader {
         final double windMultiplier = ConfigHandler.visual.snowWindMultiplier;
         final double tileSize = 0.5;
 
-        // Цвет снежинок = цвет тумана, но чуть светлее (на 20%)
+        // Цвет снежинок = цвет тумана, но чуть светлее (на 10%)
         float[] fogColor = getFogColor();
         final float snowR = Math.min(1.0f, fogColor[0] + 0.1f);
         final float snowG = Math.min(1.0f, fogColor[1] + 0.1f);
@@ -573,9 +571,6 @@ public class BlizzardShader {
         int depthToUse = (depthTexId != -1) ? depthTexId : depthTexture;
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, depthToUse);
 
-        setUniform1f(shaderProgram, "skyDesaturate", (float) ConfigHandler.visual.skyDesaturate);
-        setUniform1f(shaderProgram, "skyGray", (float) ConfigHandler.visual.skyGray);
-
         float exposure = BlizzardClientExposure.getExposure();
         float fogStrength = blizzardStrength * (getFogShelterFloor() + (1f - getFogShelterFloor()) * exposure);
         float dynamicFogStart = getFogStartMax() - (getFogStartMax() - getFogStartMin()) * fogStrength;
@@ -584,20 +579,25 @@ public class BlizzardShader {
         setUniform1f(shaderProgram, "fogStart", dynamicFogStart);
         setUniform1f(shaderProgram, "fogEnd", dynamicFogEnd);
         setUniform1f(shaderProgram, "fogCurve", (float) ConfigHandler.visual.fogCurve);
-        setUniform1f(shaderProgram, "skyWhiten", (float) ConfigHandler.visual.skyWhiten);
         setUniform1f(shaderProgram, "blizzardStrength", blizzardStrength);
 
-        // ===== Цвет тумана и dayFactor с учётом времени суток =====
+        // ===== Цвет тумана и неба с учётом времени суток =====
         float celestialAngle = mc.world.getCelestialAngle(mc.getRenderPartialTicks());
         float nightFactor = 1.0f - Math.abs(celestialAngle * 2.0f - 1.0f);
         float dayFactor = 1.0f - nightFactor;
 
         float[] fogColor = getFogColor();
         setUniform3f(shaderProgram, "fogColor", fogColor[0], fogColor[1], fogColor[2]);
-        setUniform1f(shaderProgram, "dayFactor", dayFactor);
+
+        // ★ Цвет неба вычисляется в Java (не из current.rgb).
+        //   Базовый цвет (голубое днём, тёмное ночью) + десатурация + осветление.
+        float[] skyColor = getSkyColor(nightFactor, dayFactor);
+        setUniform3f(shaderProgram, "skyColor", skyColor[0], skyColor[1], skyColor[2]);
 
         setUniform1f(shaderProgram, "projNear", projNear);
         setUniform1f(shaderProgram, "projFar", projFar);
+        setUniform1f(shaderProgram, "skyInterpEnd", (float) ConfigHandler.visual.skyInterpEnd);
+        setUniform1f(shaderProgram, "skyInterpCurve", (float) ConfigHandler.visual.skyInterpCurve);
 
         Tessellator tess = Tessellator.getInstance();
         BufferBuilder buf = tess.getBuffer();
@@ -668,6 +668,46 @@ public class BlizzardShader {
 
         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, mainFbo);
         GL30.glDeleteFramebuffers(tempFbo);
+    }
+
+    /**
+     * Возвращает цвет неба (r, g, b) с учётом времени суток,
+     * десатурации и осветления (из конфига).
+     *
+     * Базовый цвет: голубое днём, тёмно-синее ночью.
+     * Десатурация (skyDesaturate) — обесцвечивание.
+     * Серость (skyGray) — сдвиг к серому.
+     * Осветление (skyWhiten) — сдвиг к белому (только днём).
+     */
+    private static float[] getSkyColor(float nightFactor, float dayFactor) {
+        // Базовый цвет неба: голубое днём, тёмное ночью
+        float dayR = 0.5f, dayG = 0.7f, dayB = 1.0f;
+        float nightR = 0.05f, nightG = 0.05f, nightB = 0.15f;
+
+        float r = dayR + (nightR - dayR) * nightFactor;
+        float g = dayG + (nightG - dayG) * nightFactor;
+        float b = dayB + (nightB - dayB) * nightFactor;
+
+        // Десатурация (skyDesaturate)
+        float gray = 0.299f * r + 0.587f * g + 0.114f * b;
+        float desat = (float) ConfigHandler.visual.skyDesaturate * dayFactor;
+        r = r + (gray - r) * desat;
+        g = g + (gray - g) * desat;
+        b = b + (gray - b) * desat;
+
+        // Серость (skyGray)
+        float grayShift = (float) ConfigHandler.visual.skyGray * dayFactor;
+        r = r + (0.5f - r) * grayShift;
+        g = g + (0.5f - g) * grayShift;
+        b = b + (0.5f - b) * grayShift;
+
+        // Осветление (skyWhiten)
+        float whiten = (float) ConfigHandler.visual.skyWhiten * dayFactor;
+        r = r + (1.0f - r) * whiten;
+        g = g + (1.0f - g) * whiten;
+        b = b + (1.0f - b) * whiten;
+
+        return new float[]{ r, g, b };
     }
 
     // ==================== UNIFORM ====================
