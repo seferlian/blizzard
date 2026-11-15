@@ -220,6 +220,16 @@ public class BlizzardShader {
     /**
      * Рендерит снежинки вокруг игрока (3D, до пост-процесса).
      */
+    /**
+     * Рендерит снежинки вокруг игрока (3D).
+     *
+     * Вызывается ПОСЛЕ тумана:
+     *   - в ванилле — из onRenderWorldLastFog (LOWEST), после renderFogOnly;
+     *   - в Pintonium — из renderFromPintonium, после renderFogOnly.
+     *
+     * Цвет снежинок = цвет тумана + 0.2 (чуть светлее), чтобы они были
+     * заметны на фоне тумана и днём, и ночью.
+     */
     private static void renderBlizzardSnow(float partialTicks, float blizzardStrength) {
         Minecraft mc = Minecraft.getMinecraft();
         if (mc.player == null || mc.world == null) return;
@@ -237,6 +247,12 @@ public class BlizzardShader {
         final int fallCycle = ConfigHandler.visual.snowFallCycle;
         final double windMultiplier = ConfigHandler.visual.snowWindMultiplier;
         final double tileSize = 0.5;
+
+        // Цвет снежинок = цвет тумана, но чуть светлее (на 20%)
+        float[] fogColor = getFogColor();
+        final float snowR = Math.min(1.0f, fogColor[0] + 0.1f);
+        final float snowG = Math.min(1.0f, fogColor[1] + 0.1f);
+        final float snowB = Math.min(1.0f, fogColor[2] + 0.1f);
 
         int i = MathHelper.floor(entity.posX);
         int k = MathHelper.floor(entity.posZ);
@@ -378,14 +394,14 @@ public class BlizzardShader {
                     double y3 = sy                 + uy * halfSize;
                     double z3 = sz - rz2 * halfSize + uz * halfSize;
 
-                    // Полный свет (снежинки всегда белые)
+                    // Полный свет (снежинки всегда светятся)
                     int lightU = 240;
                     int lightV = 240;
 
-                    bufferbuilder.pos(x0, y0, z0).tex(u0, v1).color(1.0F, 1.0F, 1.0F, alpha).lightmap(lightU, lightV).endVertex();
-                    bufferbuilder.pos(x1, y1, z1).tex(u1, v1).color(1.0F, 1.0F, 1.0F, alpha).lightmap(lightU, lightV).endVertex();
-                    bufferbuilder.pos(x2, y2, z2).tex(u1, v0).color(1.0F, 1.0F, 1.0F, alpha).lightmap(lightU, lightV).endVertex();
-                    bufferbuilder.pos(x3, y3, z3).tex(u0, v0).color(1.0F, 1.0F, 1.0F, alpha).lightmap(lightU, lightV).endVertex();
+                    bufferbuilder.pos(x0, y0, z0).tex(u0, v1).color(snowR, snowG, snowB, alpha).lightmap(lightU, lightV).endVertex();
+                    bufferbuilder.pos(x1, y1, z1).tex(u1, v1).color(snowR, snowG, snowB, alpha).lightmap(lightU, lightV).endVertex();
+                    bufferbuilder.pos(x2, y2, z2).tex(u1, v0).color(snowR, snowG, snowB, alpha).lightmap(lightU, lightV).endVertex();
+                    bufferbuilder.pos(x3, y3, z3).tex(u0, v0).color(snowR, snowG, snowB, alpha).lightmap(lightU, lightV).endVertex();
                 }
             }
         }
@@ -419,11 +435,11 @@ public class BlizzardShader {
         GL11.glGetFloat(GL11.GL_PROJECTION_MATRIX, savedProjection);
         matricesSaved = true;
 
-        // В ванилле рисуем снежинки ДО тумана.
+        // Снежинки рисуются ПОСЛЕ тумана:
         // В Pintonium — в renderFromPintonium (после тумана).
-        if (!isPintoniumActive()) {
+        /*if (!isPintoniumActive()) {
             renderBlizzardSnow(event.getPartialTicks(), blizzardStrength);
-        }
+        }*/
 
 
     }
@@ -452,14 +468,19 @@ public class BlizzardShader {
             return;
         }
 
-        // Только туман (снежинки уже нарисованы в onRenderWorldLast)
+        // 1. Туман
         renderFogOnly(blizzardStrength, -1);
+        // 2. Снежинки ПОВЕРХ тумана
+        renderBlizzardSnow(event.getPartialTicks(), blizzardStrength);
         pintoniumActive = false;
     }
 
     /**
      * Рисует ТОЛЬКО ТУМАН (пост-процессинг).
      * Не трогает снежинки и другие 3D-объекты.
+     *
+     * Цвет тумана вычисляется через getFogColor() — тот же метод,
+     * что используется для цвета снежинок (снежинки = туман + 0.2).
      */
     private static void renderFogOnly(float blizzardStrength, int depthTexId) {
         initShader();
@@ -571,14 +592,8 @@ public class BlizzardShader {
         float nightFactor = 1.0f - Math.abs(celestialAngle * 2.0f - 1.0f);
         float dayFactor = 1.0f - nightFactor;
 
-        float dayR = 1.0f, dayG = 1.0f, dayB = 1.0f;
-        float nightR = 0.15f, nightG = 0.2f, nightB = 0.4f;
-
-        float fogR = dayR + (nightR - dayR) * nightFactor;
-        float fogG = dayG + (nightG - dayG) * nightFactor;
-        float fogB = dayB + (nightB - dayB) * nightFactor;
-
-        setUniform3f(shaderProgram, "fogColor", fogR, fogG, fogB);
+        float[] fogColor = getFogColor();
+        setUniform3f(shaderProgram, "fogColor", fogColor[0], fogColor[1], fogColor[2]);
         setUniform1f(shaderProgram, "dayFactor", dayFactor);
 
         setUniform1f(shaderProgram, "projNear", projNear);
@@ -733,6 +748,23 @@ public class BlizzardShader {
         GL30.glDeleteFramebuffers(tempFbo);
     }
 
+    /**
+     * Возвращает текущий цвет тумана (r, g, b) с учётом времени суток.
+     * Используется и для тумана (шейдер), и для снежинок (vertex color).
+     */
+    private static float[] getFogColor() {
+        float celestialAngle = mc.world.getCelestialAngle(mc.getRenderPartialTicks());
+        float nightFactor = 1.0f - Math.abs(celestialAngle * 2.0f - 1.0f);
+
+        float dayR = 1.0f, dayG = 1.0f, dayB = 1.0f;
+        float nightR = 0.15f, nightG = 0.2f, nightB = 0.4f;
+
+        float r = dayR + (nightR - dayR) * nightFactor;
+        float g = dayG + (nightG - dayG) * nightFactor;
+        float b = dayB + (nightB - dayB) * nightFactor;
+        return new float[]{ r, g, b };
+    }
+
     // ==================== DISPOSE ====================
 
     /**
@@ -788,4 +820,6 @@ public class BlizzardShader {
             }
         });
     }
+
+
 }
