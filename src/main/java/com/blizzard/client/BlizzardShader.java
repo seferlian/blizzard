@@ -302,7 +302,7 @@ public class BlizzardShader {
                     // Параметры снежинки
                     double offX = (((h >>  0) & 0xFF) / 255.0 - 0.5) * 0.9;
                     double offZ = (((h >>  8) & 0xFF) / 255.0 - 0.5) * 0.9;
-                    double offY = (((h >> 16) & 0xFF) / 255.0) * 0.5;
+                    double offY = (((h >> 16) & 0xFF) / 255.0) * 3.0;
                     double phase = (((h >> 24) & 0xFF) / 255.0) * fallCycle;
                     int tileX = (int) ((h >> 32) & 1);
                     int tileY = (int) ((h >> 33) & 1);
@@ -347,7 +347,7 @@ public class BlizzardShader {
                     double floorY = Math.max((double) Math.max(j2, j2Spawn), fallBottom);
                     if (floorY >= fallTop) continue;
 
-                    double sy = fallBottom + span * (1.0 - fallProgress) + offY * 0.5;
+                    double sy = fallBottom + span * (1.0 - fallProgress) + offY;
                     if (sy <= floorY) continue;
 
                     // Отсечение снежинок за камерой
@@ -859,6 +859,13 @@ public class BlizzardShader {
                 com.blizzard.Main.LOGGER.warn("[Blizzard] dispose() failed on disconnect: {}", t.getMessage());
             }
         });
+    }
+
+    @SubscribeEvent
+    public void onWorldLoad(net.minecraftforge.event.world.WorldEvent.Load event) {
+        if (event.getWorld().isRemote) {
+            BlizzardClientExposure.reset();  // сброс, чтобы первый пакет установил мгновенно
+        }
     }
 
 
