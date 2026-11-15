@@ -3,7 +3,7 @@ package com.blizzard.command;
 import com.blizzard.weather.BlizzardHooks;
 import com.blizzard.weather.BlizzardManager;
 import com.blizzard.weather.BlizzardReflection;
-import com.blizzard.weather.PacketBlizzard;
+import com.blizzard.network.client.PacketBlizzard;
 import net.minecraft.command.CommandBase;
 import net.minecraft.command.CommandException;
 import net.minecraft.command.ICommandSender;
@@ -11,6 +11,7 @@ import net.minecraft.command.WrongUsageException;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.text.TextComponentString;
+import net.minecraft.world.World;
 import net.minecraft.world.WorldServer;
 
 import javax.annotation.Nullable;
@@ -87,11 +88,12 @@ public class CommandWeatherExtended extends CommandBase {
         if (!mode.equals("blizzard")) {
             if (BlizzardReflection.isBlizzard(world)) {
                 // Метель идёт — запускаем плавное затухание.
-                // strength продолжит падать в tickWeather (FADE_DELTA),
-                // а новая погода начнёт действовать после затухания.
+                // blizzardTime = 0, isBlizzard остаётся true (сила плавно упадёт).
+                // tickWeather увидит time <= 0 и начнёт current -= fadeDelta.
+                // Когда current <= 0 — tickWeather сам сбросит isBlizzard и WorldInfo.
                 BlizzardReflection.setBlizzardTime(world, 0);
                 BlizzardReflection.setBlizzardTimeInfo(world.getWorldInfo(), 0);
-                BlizzardReflection.setBlizzardInfo(world.getWorldInfo(), false);
+                BlizzardReflection.setBlizzardInfo(world.getWorldInfo(), true);  // ← true, не false
             } else {
                 // Метели нет — сбрасываем на всякий случай
                 BlizzardReflection.setBlizzard(world, false, 0);
@@ -157,10 +159,13 @@ public class CommandWeatherExtended extends CommandBase {
      * @param world  мир, чьё состояние читаем.
      */
     private void sendStatus(ICommandSender sender, WorldServer world) {
-        // Состояние метели
-        boolean blizzard = BlizzardReflection.isBlizzard(world);
-        int blizzardTime = BlizzardReflection.getBlizzardTime(world);
-        float blizzardStrength = BlizzardReflection.getBlizzardStrength(world);
+        // Состояние метели — читаем из Overworld
+        World overworld = world.getMinecraftServer() != null
+                ? world.getMinecraftServer().getWorld(0)
+                : null;
+        boolean blizzard = overworld != null && BlizzardReflection.isBlizzard(overworld);
+        int blizzardTime = overworld != null ? BlizzardReflection.getBlizzardTime(overworld) : 0;
+        float blizzardStrength = overworld != null ? BlizzardReflection.getBlizzardStrength(overworld) : 0f;
 
         // Состояние ванильной погоды
         boolean raining = world.isRaining();
@@ -206,6 +211,8 @@ public class CommandWeatherExtended extends CommandBase {
                 + world.getWorldInfo().isRaining()));
         sender.sendMessage(new TextComponentString("  §7info.isThundering: §f"
                 + world.getWorldInfo().isThundering()));
+        sender.sendMessage(new TextComponentString("  §7info.cleanWeatherTime: §f"
+                + world.getWorldInfo().getCleanWeatherTime()));
         sender.sendMessage(new TextComponentString("  §7info.rainTime: §f"
                 + world.getWorldInfo().getRainTime()));
         sender.sendMessage(new TextComponentString("  §7info.thunderTime: §f"

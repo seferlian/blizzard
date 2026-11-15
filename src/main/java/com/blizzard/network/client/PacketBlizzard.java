@@ -1,6 +1,7 @@
-package com.blizzard.weather;
+package com.blizzard.network.client;
 
 import com.blizzard.raycast.BlizzardClientExposure;
+import com.blizzard.weather.BlizzardReflection;
 import io.netty.buffer.ByteBuf;
 import net.minecraft.client.Minecraft;
 import net.minecraftforge.fml.common.network.simpleimpl.*;

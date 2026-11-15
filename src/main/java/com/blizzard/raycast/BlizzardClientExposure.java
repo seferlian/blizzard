@@ -23,6 +23,7 @@ public final class BlizzardClientExposure {
     private static float currentOpen = 1f;
 
     private static boolean initialized = false;
+    private static long lastSmoothNanos = 0;
 
     public BlizzardClientExposure() {}
 
@@ -41,12 +42,14 @@ public final class BlizzardClientExposure {
         targetSky = currentSky = sky;
         targetOpen = currentOpen = open;
         initialized = true;
+        lastSmoothNanos = 0;   // следующий smooth() не сделает скачок dt
     }
 
     public static void reset() {
         targetSky = targetOpen = 1f;
         currentSky = currentOpen = 1f;
         initialized = false;
+        lastSmoothNanos = 0;
     }
 
     // ===== Чтение =====
@@ -76,10 +79,24 @@ public final class BlizzardClientExposure {
     private static void smooth() {
         if (!initialized) return;
 
-        // Коэффициент сглаживания (0.1 = 10% за кадр)
-        float alpha = 0.1f;
+        long now = System.nanoTime();
+        if (lastSmoothNanos == 0) {
+            lastSmoothNanos = now;
+            return;   // первый вызов — только запоминаем время
+        }
+        float dt = (now - lastSmoothNanos) / 1_000_000_000f; // секунды
+        lastSmoothNanos = now;
 
-        currentSky += (targetSky - currentSky) * alpha;
+        // Защита от больших dt (пауза, лаг, alt-tab)
+        if (dt > 0.5f) dt = 0.5f;
+
+        // Экспоненциальное сглаживание, независимое от FPS.
+        // halfLife = 0.15 с — за 0.15 с закрывается половина разрыва.
+        float halfLife = 0.15f;
+        float alpha = 1f - (float) Math.pow(0.5, dt / halfLife);
+
+        currentSky  += (targetSky  - currentSky)  * alpha;
         currentOpen += (targetOpen - currentOpen) * alpha;
     }
+
 }

@@ -59,7 +59,6 @@ public class Main {
             MinecraftForge.EVENT_BUS.register(new BlizzardShader());
             MinecraftForge.EVENT_BUS.register(new BlizzardSoundHandler());
             BlizzardSoundHandler.setSound(BLIZZARD_WIND);
-            MinecraftForge.EVENT_BUS.register(new BlizzardClientExposure());
             MinecraftForge.EVENT_BUS.register(new BlizzardClientCold());
             MinecraftForge.EVENT_BUS.register(new BlizzardColdHud());
         }

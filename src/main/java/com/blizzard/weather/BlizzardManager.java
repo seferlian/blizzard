@@ -1,6 +1,7 @@
 package com.blizzard.weather;
 
 import com.blizzard.network.client.ClientPacketHandlerCold;
+import com.blizzard.network.client.PacketBlizzard;
 import net.minecraftforge.fml.common.network.NetworkRegistry;
 import net.minecraftforge.fml.common.network.simpleimpl.SimpleNetworkWrapper;
 import net.minecraftforge.fml.relauncher.Side;

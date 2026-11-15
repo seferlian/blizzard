@@ -4,7 +4,6 @@ import com.blizzard.config.ConfigHandler;
 import com.blizzard.raycast.BlizzardClientExposure;
 import com.blizzard.weather.BlizzardReflection;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.ScaledResolution;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.Tessellator;
@@ -43,10 +42,10 @@ import java.nio.IntBuffer;
  *   - сила эффекта плавно смешивается по blizzardStrength.
  *
  * Порядок рендера:
- *   1. onRenderWorldLast — снежинки (до Pintonium). Pintonium их перекрывает блоками.
+ *   1. onRenderWorldLast (NORMAL) — снежинки (до Pintonium). Pintonium их перекрывает блоками.
  *   2. Pintonium рисует мир.
- *   3. renderFromPintonium (или onRenderWorldLastFog для ваниллы) — туман (после Pintonium).
- *      Туман полупрозрачный, снежинки видны сквозь него.
+ *   3. onRenderWorldLastFog (LOWEST) — туман для ваниллы (после того, как FBO заполнен).
+ *      В Pintonium туман рисуется через renderFromPintonium (ASM-хук).
  */
 @SideOnly(Side.CLIENT)
 public class BlizzardShader {
@@ -77,9 +76,9 @@ public class BlizzardShader {
         return pintoniumActive;
     }
 
-    /** Сохранённые матрицы для ASM-хука. */
-    private static FloatBuffer savedModelView = null;
-    private static FloatBuffer savedProjection = null;
+    /** Сохранённые матрицы для ASM-хука (переиспользуются, не аллоцируются каждый кадр). */
+    private static final FloatBuffer savedModelView = BufferUtils.createFloatBuffer(16);
+    private static final FloatBuffer savedProjection = BufferUtils.createFloatBuffer(16);
     private static boolean matricesSaved = false;
 
     // ====== Настройки визуала ======
@@ -89,11 +88,6 @@ public class BlizzardShader {
     private static float getFogStartMax() { return (float) ConfigHandler.visual.fogStartMax; }
     private static float getFogEndMin() { return (float) ConfigHandler.visual.fogEndMin; }
     private static float getFogEndMax() { return (float) ConfigHandler.visual.fogEndMax; }
-
-    /** Цвет тумана (белый). */
-    private static final float FOG_R = 1.0f;
-    private static final float FOG_G = 1.0f;
-    private static final float FOG_B = 1.0f;
 
     /** Атлас снежинок 2×2 (4 варианта). */
     private static final ResourceLocation SNOWFLAKES_ATLAS =
@@ -150,7 +144,6 @@ public class BlizzardShader {
                     "    float skyFactor = step(projFar * 0.995, d);\n" +
                     "    \n" +
                     "    // dayFactor из Java (0 = ночь, 1 = день).\n" +
-                    "    // Небо белеет/сереет только днём.\n" +
                     "    float gray = dot(current.rgb, vec3(0.299, 0.587, 0.114));\n" +
                     "    vec3 desaturated = mix(current.rgb, vec3(gray), skyDesaturate * dayFactor);\n" +
                     "    vec3 grayed = mix(desaturated, vec3(0.5), skyGray * dayFactor);\n" +
@@ -174,15 +167,17 @@ public class BlizzardShader {
     private static void initShader() {
         if (initialized) return;
         initialized = true;
+
+        int vs = 0, fs = 0;
         try {
             if (!GLContext.getCapabilities().GL_ARB_shader_objects) return;
 
-            int vs = ARBShaderObjects.glCreateShaderObjectARB(ARBVertexShader.GL_VERTEX_SHADER_ARB);
+            vs = ARBShaderObjects.glCreateShaderObjectARB(ARBVertexShader.GL_VERTEX_SHADER_ARB);
             ARBShaderObjects.glShaderSourceARB(vs, VERTEX_SHADER);
             ARBShaderObjects.glCompileShaderARB(vs);
             checkShaderError(vs, "VERTEX");
 
-            int fs = ARBShaderObjects.glCreateShaderObjectARB(ARBFragmentShader.GL_FRAGMENT_SHADER_ARB);
+            fs = ARBShaderObjects.glCreateShaderObjectARB(ARBFragmentShader.GL_FRAGMENT_SHADER_ARB);
             ARBShaderObjects.glShaderSourceARB(fs, FRAGMENT_SHADER);
             ARBShaderObjects.glCompileShaderARB(fs);
             checkShaderError(fs, "FRAGMENT");
@@ -192,19 +187,25 @@ public class BlizzardShader {
             ARBShaderObjects.glAttachObjectARB(shaderProgram, fs);
             ARBShaderObjects.glLinkProgramARB(shaderProgram);
 
-            ARBShaderObjects.glDeleteObjectARB(vs);
-            ARBShaderObjects.glDeleteObjectARB(fs);
+            int linked = ARBShaderObjects.glGetObjectParameteriARB(shaderProgram,
+                    ARBShaderObjects.GL_OBJECT_LINK_STATUS_ARB);
+            if (linked == GL11.GL_FALSE) {
+                String log = ARBShaderObjects.glGetInfoLogARB(shaderProgram, 4096);
+                System.err.println("[Blizzard] Program link error:\n" + log);
+                ARBShaderObjects.glDeleteObjectARB(shaderProgram);
+                shaderProgram = -1;
+            }
         } catch (Exception e) {
             e.printStackTrace();
             shaderProgram = -1;
+        } finally {
+            if (vs != 0) ARBShaderObjects.glDeleteObjectARB(vs);
+            if (fs != 0) ARBShaderObjects.glDeleteObjectARB(fs);
         }
     }
 
     /**
      * Проверяет статус компиляции шейдера и выводит лог в stderr при ошибке.
-     *
-     * @param shader GL-хэндл шейдера;
-     * @param type   "VERTEX" или "FRAGMENT" (для лога).
      */
     private static void checkShaderError(int shader, String type) {
         int compiled = ARBShaderObjects.glGetObjectParameteriARB(shader,
@@ -218,10 +219,6 @@ public class BlizzardShader {
 
     /**
      * Рендерит снежинки вокруг игрока (3D, до пост-процесса).
-     * Количество квадов, размер и alpha пропорциональны blizzardStrength.
-     *
-     * @param partialTicks     интерполяция между тиками;
-     * @param blizzardStrength сила метели (0..1).
      */
     private static void renderBlizzardSnow(float partialTicks, float blizzardStrength) {
         Minecraft mc = Minecraft.getMinecraft();
@@ -406,9 +403,7 @@ public class BlizzardShader {
 
     /**
      * Главный обработчик рендера: ТОЛЬКО СНЕЖИНКИ (3D).
-     * Туман рисуется отдельно (см. renderFogOnly).
-     *
-     * @param event событие RenderWorldLastEvent.
+     * Туман рисуется отдельно (см. onRenderWorldLastFog / renderFromPintonium).
      */
     @SubscribeEvent
     public void onRenderWorldLast(RenderWorldLastEvent event) {
@@ -417,10 +412,10 @@ public class BlizzardShader {
         float blizzardStrength = BlizzardReflection.getBlizzardStrength(mc.world);
         if (blizzardStrength <= 0.01F) return;
 
-        // Сохраняем матрицы для ASM-хука (нужны для Pintonium)
-        savedModelView = BufferUtils.createFloatBuffer(16);
-        savedProjection = BufferUtils.createFloatBuffer(16);
+        // Сохраняем матрицы для ASM-хука (переиспользуем буферы)
+        savedModelView.clear();
         GL11.glGetFloat(GL11.GL_MODELVIEW_MATRIX, savedModelView);
+        savedProjection.clear();
         GL11.glGetFloat(GL11.GL_PROJECTION_MATRIX, savedProjection);
         matricesSaved = true;
 
@@ -430,33 +425,41 @@ public class BlizzardShader {
             renderBlizzardSnow(event.getPartialTicks(), blizzardStrength);
         }
 
-        pintoniumActive = false;
+
     }
 
     /**
      * Обработчик рендера тумана для ВАНИЛЛЫ (без Pintonium).
-     * Вызывается с LOWEST priority, чтобы быть после снежинок.
-     * Если Pintonium активен, туман рисуется через ASM-хук, и мы это пропускаем.
+     * Вызывается с LOWEST priority, чтобы быть после снежинок и после того,
+     * как главный FBO заполнен. В Pintonium туман рисуется через ASM-хук.
      */
     @SubscribeEvent(priority = EventPriority.LOWEST)
     public void onRenderWorldLastFog(RenderWorldLastEvent event) {
-        if (mc.player == null || mc.world == null) return;
+        if (mc.player == null || mc.world == null) {
+            pintoniumActive = false;
+            return;
+        }
 
         float blizzardStrength = BlizzardReflection.getBlizzardStrength(mc.world);
-        if (blizzardStrength <= 0.01F) return;
+        if (blizzardStrength <= 0.01F) {
+            pintoniumActive = false;
+            return;
+        }
 
-        if (isPintoniumActive()) return;
+        if (isPintoniumActive()) {
+            // Pintonium уже нарисовал туман в этом кадре — пропускаем и сбрасываем флаг
+            pintoniumActive = false;
+            return;
+        }
 
         // Только туман (снежинки уже нарисованы в onRenderWorldLast)
         renderFogOnly(blizzardStrength, -1);
+        pintoniumActive = false;
     }
 
     /**
      * Рисует ТОЛЬКО ТУМАН (пост-процессинг).
      * Не трогает снежинки и другие 3D-объекты.
-     *
-     * @param blizzardStrength сила метели (0..1);
-     * @param depthTexId       ID depth-текстуры (для Pintonium). -1 для ваниллы.
      */
     private static void renderFogOnly(float blizzardStrength, int depthTexId) {
         initShader();
@@ -564,14 +567,11 @@ public class BlizzardShader {
         setUniform1f(shaderProgram, "blizzardStrength", blizzardStrength);
 
         // ===== Цвет тумана и dayFactor с учётом времени суток =====
-        // celestialAngle: 0 = полдень, 0.5 = полночь, 1 = полдень
         float celestialAngle = mc.world.getCelestialAngle(mc.getRenderPartialTicks());
-        float nightFactor = 1.0f - Math.abs(celestialAngle * 2.0f - 1.0f); // 0 = полдень, 1 = полночь
-        float dayFactor = 1.0f - nightFactor; // 0 = ночь, 1 = день
+        float nightFactor = 1.0f - Math.abs(celestialAngle * 2.0f - 1.0f);
+        float dayFactor = 1.0f - nightFactor;
 
-        // Дневной цвет (белый)
         float dayR = 1.0f, dayG = 1.0f, dayB = 1.0f;
-        // Ночной цвет (тёмно-синий)
         float nightR = 0.15f, nightG = 0.2f, nightB = 0.4f;
 
         float fogR = dayR + (nightR - dayR) * nightFactor;
@@ -624,13 +624,6 @@ public class BlizzardShader {
 
     // ==================== ГЛУБИНА ====================
 
-    /**
-     * Создаёт GL-текстуру для хранения глубины.
-     * При resize — удаляет старую и создаёт новую.
-     *
-     * @param w ширина;
-     * @param h высота.
-     */
     private static void createDepthTexture(int w, int h) {
         if (depthTexture != -1) GL11.glDeleteTextures(depthTexture);
         depthTexture = GL11.glGenTextures();
@@ -642,12 +635,6 @@ public class BlizzardShader {
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
     }
 
-    /**
-     * Копирует буфер глубины основного FBO в depthTexture через blitFramebuffer.
-     *
-     * @param w ширина;
-     * @param h высота.
-     */
     private static void copyDepthToTexture(int w, int h) {
         if (depthTexture == -1) return;
 
@@ -670,19 +657,16 @@ public class BlizzardShader {
 
     // ==================== UNIFORM ====================
 
-    /** Устанавливает int-uniform по имени. */
     private static void setUniform1i(int p, String n, int v) {
         int l = ARBShaderObjects.glGetUniformLocationARB(p, n);
         if (l != -1) ARBShaderObjects.glUniform1iARB(l, v);
     }
 
-    /** Устанавливает float-uniform по имени. */
     private static void setUniform1f(int p, String n, float v) {
         int l = ARBShaderObjects.glGetUniformLocationARB(p, n);
         if (l != -1) ARBShaderObjects.glUniform1fARB(l, v);
     }
 
-    /** Устанавливает vec3-uniform по имени. */
     private static void setUniform3f(int p, String n, float x, float y, float z) {
         int l = ARBShaderObjects.glGetUniformLocationARB(p, n);
         if (l != -1) ARBShaderObjects.glUniform3fARB(l, x, y, z);
@@ -708,7 +692,7 @@ public class BlizzardShader {
         }
 
         // 3. Восстанавливаем матрицы (туман их сбил)
-        if (matricesSaved && savedModelView != null && savedProjection != null) {
+        if (matricesSaved) {
             savedProjection.rewind();
             GL11.glMatrixMode(GL11.GL_PROJECTION);
             GL11.glLoadMatrix(savedProjection);
@@ -747,5 +731,61 @@ public class BlizzardShader {
 
         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, mainFbo);
         GL30.glDeleteFramebuffers(tempFbo);
+    }
+
+    // ==================== DISPOSE ====================
+
+    /**
+     * Удаляет GL-ресурсы мода. Вызывать при выгрузке мира / смене контекста.
+     * Каждый GL-вызов в try/catch, чтобы при мёртвом контексте не накапливать GL 1282.
+     */
+    public static void dispose() {
+        try {
+            if (copyFramebuffer != null) {
+                copyFramebuffer.deleteFramebuffer();
+            }
+        } catch (Throwable t) {
+            // Контекст мёртв — пропускаем
+        }
+        copyFramebuffer = null;
+
+        try {
+            if (depthTexture != -1) {
+                GL11.glDeleteTextures(depthTexture);
+            }
+        } catch (Throwable t) {
+            // Контекст мёртв — пропускаем
+        }
+        depthTexture = -1;
+
+        try {
+            if (shaderProgram != -1) {
+                ARBShaderObjects.glDeleteObjectARB(shaderProgram);
+            }
+        } catch (Throwable t) {
+            // Контекст мёртв — пропускаем
+        }
+        shaderProgram = -1;
+
+        initialized = false;
+        lastWidth = lastHeight = 0;
+        matricesSaved = false;
+        pintoniumActive = false;
+    }
+
+    /**
+     * Вызывается при отключении от сервера (в Netty-потоке).
+     * Планируем dispose в главном потоке, где GL-контекст ещё активен.
+     */
+    @SubscribeEvent
+    public void onClientDisconnect(net.minecraftforge.fml.common.network.FMLNetworkEvent.ClientDisconnectionFromServerEvent event) {
+        Minecraft.getMinecraft().addScheduledTask(() -> {
+            try {
+                dispose();
+                com.blizzard.raycast.BlizzardClientExposure.reset();
+            } catch (Throwable t) {
+                com.blizzard.Main.LOGGER.warn("[Blizzard] dispose() failed on disconnect: {}", t.getMessage());
+            }
+        });
     }
 }

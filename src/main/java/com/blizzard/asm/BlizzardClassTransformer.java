@@ -38,8 +38,6 @@ public class BlizzardClassTransformer implements IClassTransformer {
     private static final String CLS_WORLD_SERVER = "net/minecraft/world/WorldServer";
     private static final String CLS_WORLD_CLIENT = "net/minecraft/client/multiplayer/WorldClient";
     private static final String CLS_WORLD_INFO   = "net/minecraft/world/storage/WorldInfo";
-    private static final String CLS_GUI_INGAME_FORGE = "net/minecraftforge/client/GuiIngameForge";
-    private static final String CLS_IRIS_HAND = "net/irisshaders/iris/pathways/HandRenderer";
 
 
     // ============ Дескрипторы BlizzardHooks (Object-версии) ============
@@ -105,9 +103,6 @@ public class BlizzardClassTransformer implements IClassTransformer {
                 return patchIrisFinalPass(basicClass);
             }
 
-            if (transformedName.equals("net.irisshaders.iris.pathways.HandRenderer")) {
-                return patchIrisHandRenderer(basicClass);
-            }
 
         } catch (Throwable t) {
             System.err.println("[Blizzard ASM] !!! EXCEPTION while patching " + transformedName);
@@ -115,53 +110,6 @@ public class BlizzardClassTransformer implements IClassTransformer {
         }
         return basicClass;
     }
-
-    private byte[] patchIrisHandRenderer(byte[] basicClass) {
-        ClassNode cn = new ClassNode();
-        new ClassReader(basicClass).accept(cn, 0);
-
-        boolean found = false;
-        for (MethodNode m : cn.methods) {
-            if (m.name.equals("renderSolid") && m.desc.equals(DESC_HAND_SOLID)) {
-                InsnList insns = new InsnList();
-
-                // if (BlizzardHooks.shouldDelayHand()) {
-                insns.add(new MethodInsnNode(INVOKESTATIC,
-                        "com/blizzard/weather/BlizzardHooks",
-                        "shouldDelayHand",
-                        "()Z", false));
-                LabelNode notDelay = new LabelNode();
-                insns.add(new JumpInsnNode(IFEQ, notDelay));
-
-                //     BlizzardHooks.saveHandRenderData(tickDelta, camera, gameRenderer, pipeline);
-                insns.add(new VarInsnNode(FLOAD, 1)); // tickDelta
-                insns.add(new VarInsnNode(ALOAD, 2)); // camera
-                insns.add(new VarInsnNode(ALOAD, 3)); // gameRenderer
-                insns.add(new VarInsnNode(ALOAD, 4)); // pipeline
-                insns.add(new MethodInsnNode(INVOKESTATIC,
-                        "com/blizzard/weather/BlizzardHooks",
-                        "saveHandRenderData",
-                        "(FLjava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V", false));
-
-                //     return;
-                insns.add(new InsnNode(RETURN));
-                insns.add(notDelay);
-
-                m.instructions.insertBefore(m.instructions.getFirst(), insns);
-                found = true;
-                if (DEBUG) System.out.println("[Blizzard ASM] Hooked HandRenderer.renderSolid");
-            }
-        }
-
-        if (!found && DEBUG) {
-            System.out.println("[Blizzard ASM] WARNING: renderSolid not found in HandRenderer");
-        }
-
-        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS | ClassWriter.COMPUTE_FRAMES);
-        cn.accept(cw);
-        return cw.toByteArray();
-    }
-
 
     private byte[] patchIrisFinalPass(byte[] basicClass) {
         ClassNode cn = new ClassNode();

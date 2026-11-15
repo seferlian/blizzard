@@ -3,12 +3,15 @@ package com.blizzard.capabilities;
 import com.blizzard.config.ConfigHandler;
 import com.blizzard.damage.BlizzardDamageSource;
 import com.blizzard.raycast.BlizzardExposure;
+import com.blizzard.weather.BlizzardHooks;
 import com.blizzard.weather.BlizzardManager;
 import com.blizzard.weather.BlizzardReflection;
 import com.blizzard.network.client.ClientPacketHandlerCold;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.world.World;
+import net.minecraft.world.storage.WorldInfo;
 
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -126,7 +129,6 @@ public class BlizzardColdCapability {
         if (player.isCreative() || player.isSpectator()) {
             if (this.cold != 0f) {
                 this.cold = 0f;
-                // немедленно синхронизируем клиент
                 BlizzardManager.NETWORK.sendTo(
                         new ClientPacketHandlerCold.Packet(0f),
                         player
@@ -135,46 +137,45 @@ public class BlizzardColdCapability {
             return;
         }
 
-        // Вне Overworld холод не накапливается, но и не сбрасывается мгновенно
-        if (player.world.provider.getDimension() != 0) {
+        // В измерениях без эффектов метели холод убывает
+        if (!BlizzardHooks.isDimensionAffected(player.world.provider.getDimension())) {
             this.cold = Math.max(0f, this.cold - getDrainPerTick());
             this.scheduleSync(player);
             this.tick++;
             return;
         }
 
-        boolean blizzard = BlizzardReflection.isBlizzard(player.world);
+        // Читаем состояние из Overworld (где метель тикает)
+        World overworld = player.getServer() != null
+                ? player.getServer().getWorld(0)
+                : null;
+        boolean blizzard = overworld != null && BlizzardReflection.isBlizzard(overworld);
 
         if (blizzard) {
-            // Гарантируем, что exposure посчитан (tickWeather мог не успеть)
             BlizzardExposure.tick(player, player.world);
 
-            float strength = BlizzardReflection.getBlizzardStrength(player.world);
+            float strength = overworld != null
+                    ? BlizzardReflection.getBlizzardStrength(overworld)
+                    : 0f;
             float exposure = BlizzardExposure.getExposure(player);
 
-            // Холод накапливается только при полной силе метели
-            // и при достаточной открытости
             boolean fullStrength = strength >= 0.999f;
 
             if (fullStrength && exposure > getExposureThreshold()) {
                 float norm = (exposure - getExposureThreshold()) / (1f - getExposureThreshold());
 
-                // 1. Броня
                 int armorPieces = countArmorPieces(player);
                 float armorSlowdown = Math.min(1.0f, armorPieces * getArmorSlotSlowdown());
                 float multiplier = 1.0f - armorSlowdown;
 
-                // 2. Тепло от огня/факелов
                 float heatProtection = BlizzardExposure.getHeatProtection(player);
                 multiplier *= (1.0f - heatProtection);
 
-                // 3. Вода (если применяется)
                 if (player.isInWater()) {
                     multiplier *= (float) getWaterMultiplier();
                 }
 
                 this.cold += (getColdGainPerTick() * norm) * multiplier;
-
             } else {
                 this.cold -= getDrainPerTick();
             }
@@ -184,7 +185,6 @@ public class BlizzardColdCapability {
 
         this.cold = clamp01(this.cold);
 
-        // Урон (только во время метели и только если cold дошёл до порога)
         if (blizzard && this.cold >= getDamageStartCold()) {
             this.applyColdDamage(player);
         }

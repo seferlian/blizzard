@@ -1,8 +1,10 @@
 package com.blizzard.weather;
 
+import com.blizzard.network.client.PacketBlizzard;
 import com.blizzard.raycast.BlizzardExposure;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.world.World;
+import net.minecraft.world.storage.WorldInfo;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.PlayerEvent;
 
@@ -29,37 +31,35 @@ public class BlizzardPlayerHandler {
      */
     @SubscribeEvent
     public void onPlayerLogin(PlayerEvent.PlayerLoggedInEvent event) {
-        // Обрабатываем только серверных игроков (на клиенте этот ивент не нужен)
         if (!(event.player instanceof EntityPlayerMP)) return;
         EntityPlayerMP player = (EntityPlayerMP) event.player;
-        // Мир должен быть серверным (isRemote == false), иначе это клиент
         World world = player.world;
         if (world == null || world.isRemote) return;
-        // Регистрируем WorldInfo → World, чтобы writeNBT смог синхронизировать
-        // актуальное состояние метели перед сохранением мира
+
         BlizzardHooks.registerWorldInfo(world);
 
-        // Метель существует только в Overworld — для других измерений выходим
-        if (world.provider.getDimension() != 0) return;
+        if (!BlizzardHooks.isDimensionAffected(world.provider.getDimension())) return;
 
-        // Если метель активна — сразу отправляем пакет новому игроку
-        if (BlizzardReflection.isBlizzard(world)) {
-            // Считаем экспозицию сразу, чтобы клиент не ждал 4 тика
-            BlizzardExposure.tick(player, world);
-            BlizzardExposure.Entry e = BlizzardExposure.getEntry(player);
+        // Читаем состояние из Overworld
+        World overworld = player.getServer() != null
+                ? player.getServer().getWorld(0)
+                : null;
+        if (overworld == null || !BlizzardReflection.isBlizzard(overworld)) return;
 
-            int time = BlizzardReflection.getBlizzardTime(world);
-            float strength = BlizzardReflection.getBlizzardStrength(world);
-            float sky  = BlizzardExposure.getSkyExposure(player);
-            float open = BlizzardExposure.getOpenness(player);
+        BlizzardExposure.tick(player, world);
+        BlizzardExposure.Entry e = BlizzardExposure.getEntry(player);
 
-            BlizzardManager.NETWORK.sendTo(
-                    new PacketBlizzard(true, time, strength, sky, open), player);
+        int time = BlizzardReflection.getBlizzardTime(overworld);
+        float strength = BlizzardReflection.getBlizzardStrength(overworld);
+        float sky  = BlizzardExposure.getSkyExposure(player);
+        float open = BlizzardExposure.getOpenness(player);
 
-            e.lastSentSky  = sky;
-            e.lastSentOpen = open;
-            e.lastSentTick = world.getTotalWorldTime();
-        }
+        BlizzardManager.NETWORK.sendTo(
+                new PacketBlizzard(true, time, strength, sky, open), player);
+
+        e.lastSentSky  = sky;
+        e.lastSentOpen = open;
+        e.lastSentTick = world.getTotalWorldTime();
     }
 
     /**
@@ -77,5 +77,40 @@ public class BlizzardPlayerHandler {
             BlizzardExposure.clear(p);
             BlizzardHooks.clearDebugFor(p.getUniqueID());
         }
+    }
+
+    @SubscribeEvent
+    public void onPlayerChangedDimension(net.minecraftforge.fml.common.gameevent.PlayerEvent.PlayerChangedDimensionEvent event) {
+        if (!(event.player instanceof EntityPlayerMP)) return;
+        EntityPlayerMP mp = (EntityPlayerMP) event.player;
+
+        // Если перешёл в измерение без эффектов — шлём active = false
+        if (!BlizzardHooks.isDimensionAffected(event.toDim)) {
+            BlizzardManager.NETWORK.sendTo(
+                    new PacketBlizzard(false, 0, 0.0F, 1f, 1f), mp);
+            BlizzardExposure.clear(mp);
+            return;
+        }
+
+        // Читаем состояние из Overworld
+        World overworld = mp.getServer() != null
+                ? mp.getServer().getWorld(0)
+                : null;
+        if (overworld == null || !BlizzardReflection.isBlizzard(overworld)) return;
+
+        BlizzardExposure.tick(mp, mp.world);
+        BlizzardExposure.Entry e = BlizzardExposure.getEntry(mp);
+
+        int time = BlizzardReflection.getBlizzardTime(overworld);
+        float strength = BlizzardReflection.getBlizzardStrength(overworld);
+        float sky  = BlizzardExposure.getSkyExposure(mp);
+        float open = BlizzardExposure.getOpenness(mp);
+
+        BlizzardManager.NETWORK.sendTo(
+                new PacketBlizzard(true, time, strength, sky, open), mp);
+
+        e.lastSentSky  = sky;
+        e.lastSentOpen = open;
+        e.lastSentTick = mp.world.getTotalWorldTime();
     }
 }

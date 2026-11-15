@@ -2,8 +2,8 @@ package com.blizzard.weather;
 
 import com.blizzard.client.BlizzardShader;
 import com.blizzard.config.ConfigHandler;
+import com.blizzard.network.client.PacketBlizzard;
 import com.blizzard.raycast.BlizzardExposure;
-import net.minecraft.client.Minecraft;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.nbt.NBTTagCompound;
@@ -236,52 +236,98 @@ public class BlizzardHooks {
      * @param world серверный мир.
      */
     public static void tickWeather(World world) {
-        // Только сервер, только Overworld
+        // Только сервер
         if (world.isRemote) return;
-        if (world.provider.getDimension() != 0) return;
+
+        boolean isOverworld = world.provider.getDimension() == 0;
 
         // Запоминаем связь WorldInfo → World для writeNBT
         registerWorldInfo(world);
 
-        // Восстанавливаем метель из NBT (один раз после загрузки мира)
+        // Восстанавливаем метель из NBT (один раз для каждого World)
         restoreIfNeeded(world);
 
         // ===== Метель активна =====
-        if (BlizzardReflection.isBlizzard(world)) {
-            // Проверяем, включен ли цикл погоды.
-            // Если doWeatherCycle = false, метель "застывает" и не заканчивается.
-            boolean doWeatherCycle = world.getGameRules().getBoolean("doWeatherCycle");
+        // Читаем состояние из Overworld (где метель тикает).
+        // WorldInfo может быть DerivedWorldInfo (обёрткой), которая не хранит
+        // поле blizzard — поэтому читать WorldInfo нельзя.
+        World overworld = isOverworld
+                ? world
+                : (world.getMinecraftServer() != null ? world.getMinecraftServer().getWorld(0) : null);
 
+        boolean blizzardActive = overworld != null && BlizzardReflection.isBlizzard(overworld);
+
+        if (blizzardActive) {
             int time;
-            if (doWeatherCycle) {
-                // Тикаем таймер метели (обычное поведение)
-                time = BlizzardReflection.getBlizzardTime(world) - 1;
-                BlizzardReflection.setBlizzardTime(world, time);
+            float current;
+
+            // ---- Тикаем таймер и силу ТОЛЬКО в Overworld ----
+            if (isOverworld) {
+                boolean doWeatherCycle = world.getGameRules().getBoolean("doWeatherCycle");
+
+                if (doWeatherCycle) {
+                    time = BlizzardReflection.getBlizzardTime(world) - 1;
+                    BlizzardReflection.setBlizzardTime(world, time);
+                } else {
+                    time = BlizzardReflection.getBlizzardTime(world);
+                }
+
+                current = BlizzardReflection.getBlizzardStrength(world);
+                float target = (time > 0) ? 1.0F : 0.0F;
+
+                if (current < target) current = Math.min(target, current + getGrowDelta());
+                else if (current > target) current = Math.max(target, current - getFadeDelta());
+
+                BlizzardReflection.setPrevBlizzardStrength(world, BlizzardReflection.getBlizzardStrength(world));
+                BlizzardReflection.setBlizzardStrength(world, current);
+
+                // Синхронизируем WorldInfo (для NBT)
+                WorldInfo infoSync = world.getWorldInfo();
+                if (infoSync != null) {
+                    BlizzardReflection.setBlizzardInfo(infoSync, true);
+                    BlizzardReflection.setBlizzardTimeInfo(infoSync, time);
+                    BlizzardReflection.setBlizzardStrengthInfo(infoSync, current);
+                }
+
+                // ===== Конец метели =====
+                if (time <= 0 && current <= 0.0F) {
+                    BlizzardReflection.setBlizzard(world, false, 0);
+
+                    WorldInfo infoEnd = world.getWorldInfo();
+                    if (infoEnd != null) {
+                        BlizzardReflection.setBlizzardInfo(infoEnd, false);
+                        BlizzardReflection.setBlizzardTimeInfo(infoEnd, 0);
+                        BlizzardReflection.setBlizzardStrengthInfo(infoEnd, 0.0F);
+                    }
+
+                    for (WorldServer ws : world.getMinecraftServer().worlds) {
+                        for (EntityPlayer p : ws.playerEntities) {
+                            if (p instanceof EntityPlayerMP) {
+                                BlizzardManager.NETWORK.sendTo(
+                                        new PacketBlizzard(false, 0, 0.0F, 1f, 1f),
+                                        (EntityPlayerMP) p);
+                            }
+                        }
+                    }
+
+                    BlizzardExposure.clearAll();
+                    LAST_DEBUG.clear();
+                    return;
+                }
             } else {
-                // Цикл погоды отключён: таймер не уменьшается.
-                // Берём текущее значение (например, 5000 тиков) и не трогаем его.
-                time = BlizzardReflection.getBlizzardTime(world);
+                // В не-Overworld читаем World Overworld
+                time = BlizzardReflection.getBlizzardTime(overworld);
+                current = BlizzardReflection.getBlizzardStrength(overworld);
             }
 
-            // Дальше идёт логика движения силы (она должна работать, чтобы
-            // метель плавно нарастала до 1.0 даже при отключенном цикле).
-            float current = BlizzardReflection.getBlizzardStrength(world);
-            float target  = (time > 0) ? 1.0F : 0.0F;
-
-            if (current < target) current = Math.min(target, current + getGrowDelta());
-            else if (current > target) current = Math.max(target, current - getFadeDelta());
-
-            BlizzardReflection.setPrevBlizzardStrength(world, BlizzardReflection.getBlizzardStrength(world));
-            BlizzardReflection.setBlizzardStrength(world, current);
-
-            // Плавно гасим дождь/грозу, пока идёт метель
-            world.prevRainingStrength     = world.rainingStrength;
-            world.prevThunderingStrength  = world.thunderingStrength;
+            // Плавно гасим ванильный дождь/грозу во ВСЕХ измерениях
+            world.prevRainingStrength    = world.rainingStrength;
+            world.prevThunderingStrength = world.thunderingStrength;
             world.rainingStrength    = Math.max(0.0F, world.rainingStrength    - getFadeDelta() * 2);
             world.thunderingStrength = Math.max(0.0F, world.thunderingStrength - getFadeDelta() * 2);
 
-            // ===== Экспозиция + адресная рассылка =====
-            if (world instanceof WorldServer) {
+            // ---- Эффекты (экспозиция + пакеты) ----
+            if (world instanceof WorldServer && isDimensionAffected(world.provider.getDimension())) {
                 WorldServer ws = (WorldServer) world;
                 long now = ws.getTotalWorldTime();
 
@@ -290,50 +336,35 @@ public class BlizzardHooks {
                     EntityPlayerMP mp = (EntityPlayerMP) p;
                     if (mp.isSpectator() || mp.isDead) continue;
 
-                    // Обновляем экспозицию (внутри она плавно сдвигается к цели каждый тик)
                     BlizzardExposure.tick(mp, ws);
 
-                    // Получаем уже сглаженные значения
                     float sky  = BlizzardExposure.getSkyExposure(mp);
                     float open = BlizzardExposure.getOpenness(mp);
 
-                    // Отправляем пакет КАЖДЫЙ тик.
-                    // Благодаря плавному движению sky и open на сервере (шаг 0.05),
-                    // клиент получает поток плавно меняющихся данных 20 раз в секунду.
-                    // Сетевая нагрузка ничтожна (~20 байт * 20 тиков = 400 байт/сек на игрока).
-                    BlizzardManager.NETWORK.sendTo(
-                            new PacketBlizzard(true, time, current, sky, open), mp);
-
-                    // Обновляем lastSent (хоть мы и шлем каждый тик, эти поля могут пригодиться в будущем)
                     BlizzardExposure.Entry entry = BlizzardExposure.getEntry(mp);
-                    entry.lastSentSky  = sky;
-                    entry.lastSentOpen = open;
-                    entry.lastSentTick = now;
 
-                    // ===== Отладка в чат раз в секунду =====
-                    sendDebugToChat(mp, sky, open, time, current);
-                }
-            }
+                    boolean timeToSend = (now % 2 == 0);
+                    boolean bigChange =
+                            Math.abs(sky  - entry.lastSentSky)  > 0.05f ||
+                                    Math.abs(open - entry.lastSentOpen) > 0.05f;
+                    boolean stale = (now - entry.lastSentTick) >= 10;
 
-            // ===== Конец метели =====
-            if (time <= 0 && current <= 0.0F) {
-                BlizzardReflection.setBlizzard(world, false, 0);
-                if (world instanceof WorldServer) {
-                    WorldServer ws = (WorldServer) world;
-                    for (EntityPlayer p : ws.playerEntities) {
-                        if (!(p instanceof EntityPlayerMP)) continue;
+                    if (timeToSend || bigChange || stale) {
                         BlizzardManager.NETWORK.sendTo(
-                                new PacketBlizzard(false, 0, 0.0F, 1f, 1f),
-                                (EntityPlayerMP) p);
+                                new PacketBlizzard(true, time, current, sky, open), mp);
+
+                        entry.lastSentSky  = sky;
+                        entry.lastSentOpen = open;
+                        entry.lastSentTick = now;
                     }
                 }
-                BlizzardExposure.clearAll();
-                LAST_DEBUG.clear();
             }
             return;
         }
 
-        // ===== Метель не активна — детект смены ванильной погоды =====
+        // ===== Метель не активна — детект смены погоды (только в Overworld) =====
+        if (!isOverworld) return;
+
         WorldInfo info = world.getWorldInfo();
         boolean currentRaining = info.isRaining();
         boolean currentThundering = info.isThundering();
@@ -349,7 +380,6 @@ public class BlizzardHooks {
         LAST_RAINING.put(world, currentRaining);
         LAST_THUNDERING.put(world, currentThundering);
 
-        // Если смена — проверяем, разрешён ли запуск метели
         if (rainingChanged || thunderingChanged) {
             if (shouldAllowBlizzard(lastRaining, lastThundering, currentRaining, currentThundering)) {
                 if (RANDOM.nextFloat() < getBlizzardChance()) {
@@ -392,25 +422,30 @@ public class BlizzardHooks {
             BlizzardReflection.setBlizzardStrengthInfo(info, BlizzardReflection.getBlizzardStrength(world));
         }
 
-        // Первичная рассылка — с дефолтными exposure (1/1),
-        // реальные значения придут в следующем тике tickWeather.
-        // Обновляем lastSent*, чтобы первый tickWeather не дублировал пакет.
-        if (world instanceof WorldServer) {
-            WorldServer ws = (WorldServer) world;
-            long now = ws.getTotalWorldTime();
+        // Первичная рассылка — только в разрешённые измерения.
+        // В запрещённых измерениях клиент не должен получить active=true,
+        // иначе нарисует метель, которой там быть не должно.
+        if (world.getMinecraftServer() != null) {
             float strength = BlizzardReflection.getBlizzardStrength(world);
 
-            for (EntityPlayer p : ws.playerEntities) {
-                if (!(p instanceof EntityPlayerMP)) continue;
-                EntityPlayerMP mp = (EntityPlayerMP) p;
+            for (WorldServer ws : world.getMinecraftServer().worlds) {
+                if (!isDimensionAffected(ws.provider.getDimension())) continue;
 
-                BlizzardManager.NETWORK.sendTo(
-                        new PacketBlizzard(true, duration, strength, 1f, 1f), mp);
+                long now = ws.getTotalWorldTime();
 
-                BlizzardExposure.Entry e = BlizzardExposure.getEntry(mp);
-                e.lastSentSky  = 1f;
-                e.lastSentOpen = 1f;
-                e.lastSentTick = now;
+                for (EntityPlayer p : ws.playerEntities) {
+                    if (!(p instanceof EntityPlayerMP)) continue;
+                    EntityPlayerMP mp = (EntityPlayerMP) p;
+                    if (mp.isSpectator() || mp.isDead) continue;
+
+                    BlizzardManager.NETWORK.sendTo(
+                            new PacketBlizzard(true, duration, strength, 1f, 1f), mp);
+
+                    BlizzardExposure.Entry e = BlizzardExposure.getEntry(mp);
+                    e.lastSentSky  = 1f;
+                    e.lastSentOpen = 1f;
+                    e.lastSentTick = now;
+                }
             }
         }
 
@@ -456,52 +491,72 @@ public class BlizzardHooks {
         RESTORED_WORLDS.put(world, Boolean.TRUE);
 
         try {
-            WorldInfo info = world.getWorldInfo();
-            if (info == null) return;
+            boolean isOverworld = world.provider.getDimension() == 0;
 
-            // Инициализируем LAST_* по текущему состоянию, чтобы первый тик не считался сменой
-            LAST_RAINING.put(world, info.isRaining());
-            LAST_THUNDERING.put(world, info.isThundering());
+            // Для Overworld: восстанавливаем World из WorldInfo (NBT)
+            if (isOverworld) {
+                WorldInfo info = world.getWorldInfo();
+                if (info != null) {
+                    boolean infoBlizzard = BlizzardReflection.isBlizzardInfo(info);
+                    int infoTime = BlizzardReflection.getBlizzardTimeInfo(info);
+                    float infoStrength = BlizzardReflection.getBlizzardStrengthInfo(info);
 
-            boolean infoBlizzard = BlizzardReflection.isBlizzardInfo(info);
-            int infoTime = BlizzardReflection.getBlizzardTimeInfo(info);
-            float infoStrength = BlizzardReflection.getBlizzardStrengthInfo(info);
+                    // Восстанавливаем поле World из WorldInfo
+                    if (infoBlizzard && (infoTime > 0 || infoStrength > 0.01F)) {
+                        BlizzardReflection.setBlizzard(world, true, infoTime);
+                        BlizzardReflection.setBlizzardStrength(world, infoStrength);
+                        BlizzardReflection.setPrevBlizzardStrength(world, infoStrength);
 
-            // Восстанавливаем, если метель активна ИЛИ ещё идёт затухание (time=0, strength>0)
+                        System.out.println("[Blizzard] Restored World from WorldInfo: "
+                                + infoTime + " ticks, strength " + infoStrength);
+                    }
+
+                    // Инициализируем LAST_* по текущему состоянию
+                    LAST_RAINING.put(world, info.isRaining());
+                    LAST_THUNDERING.put(world, info.isThundering());
+                }
+            }
+
+            // Читаем состояние из Overworld (теперь World восстановлен)
+            World overworld = isOverworld
+                    ? world
+                    : (world.getMinecraftServer() != null ? world.getMinecraftServer().getWorld(0) : null);
+
+            if (overworld == null) return;
+
+            boolean infoBlizzard = BlizzardReflection.isBlizzard(overworld);
+            int infoTime = BlizzardReflection.getBlizzardTime(overworld);
+            float infoStrength = BlizzardReflection.getBlizzardStrength(overworld);
+
+            // Рассылка пакетов — для всех измерений с эффектами
             if (infoBlizzard && (infoTime > 0 || infoStrength > 0.01F)) {
-                BlizzardReflection.setBlizzard(world, true, infoTime);
-                BlizzardReflection.setBlizzardStrength(world, infoStrength);
-                BlizzardReflection.setPrevBlizzardStrength(world, infoStrength);
+                if (world.getMinecraftServer() != null) {
+                    for (WorldServer ws : world.getMinecraftServer().worlds) {
+                        if (!isDimensionAffected(ws.provider.getDimension())) continue;
 
-                // Адресная рассылка с посчитанной экспозицией.
-                // WorldServer.playerEntities имеет тип List<EntityPlayer>, поэтому
-                // фильтруем через instanceof — на сервере в списке только EntityPlayerMP.
-                if (world instanceof WorldServer) {
-                    WorldServer ws = (WorldServer) world;
-                    long now = ws.getTotalWorldTime();
+                        long now = ws.getTotalWorldTime();
 
-                    for (EntityPlayer p : ws.playerEntities) {
-                        if (!(p instanceof EntityPlayerMP)) continue;
-                        EntityPlayerMP mp = (EntityPlayerMP) p;
-                        if (mp.isSpectator() || mp.isDead) continue;
+                        for (EntityPlayer p : ws.playerEntities) {
+                            if (!(p instanceof EntityPlayerMP)) continue;
+                            EntityPlayerMP mp = (EntityPlayerMP) p;
+                            if (mp.isSpectator() || mp.isDead) continue;
 
-                        BlizzardExposure.tick(mp, ws);
-                        BlizzardExposure.Entry e = BlizzardExposure.getEntry(mp);
+                            BlizzardExposure.tick(mp, ws);
+                            BlizzardExposure.Entry e = BlizzardExposure.getEntry(mp);
 
-                        float sky  = BlizzardExposure.getSkyExposure(mp);
-                        float open = BlizzardExposure.getOpenness(mp);
+                            float sky  = BlizzardExposure.getSkyExposure(mp);
+                            float open = BlizzardExposure.getOpenness(mp);
 
-                        BlizzardManager.NETWORK.sendTo(
-                                new PacketBlizzard(true, infoTime, infoStrength, sky, open), mp);
+                            BlizzardManager.NETWORK.sendTo(
+                                    new PacketBlizzard(true, infoTime, infoStrength, sky, open), mp);
 
-                        e.lastSentSky  = sky;
-                        e.lastSentOpen = open;
-                        e.lastSentTick = now;
+                            e.lastSentSky  = sky;
+                            e.lastSentOpen = open;
+                            e.lastSentTick = now;
+                        }
                     }
                 }
 
-                System.out.println("[Blizzard] Restored blizzard from NBT: "
-                        + infoTime + " ticks, strength " + infoStrength);
             }
         } catch (Throwable t) {
             t.printStackTrace();
@@ -510,8 +565,12 @@ public class BlizzardHooks {
 
     /** Хук для ASM: возвращает true, если метель активна. */
     public static boolean isBlizzardActive(World world) {
-        return BlizzardReflection.isBlizzard(world);
+        World overworld = world.provider.getDimension() == 0
+                ? world
+                : (world.getMinecraftServer() != null ? world.getMinecraftServer().getWorld(0) : null);
+        return overworld != null && BlizzardReflection.isBlizzard(overworld);
     }
+
 
 
     public static void clearDebugFor(java.util.UUID id) {
@@ -548,6 +607,22 @@ public class BlizzardHooks {
         }
 
         BlizzardShader.renderFromPintonium(depthTexId);
+    }
+
+    /**
+     * Проверяет, применяются ли эффекты метели в данном измерении.
+     * Пустой список effectDimensions = эффекты везде (обратная совместимость).
+     *
+     * @param dimensionId ID измерения.
+     * @return true, если эффекты применяются.
+     */
+    public static boolean isDimensionAffected(int dimensionId) {
+        int[] dims = ConfigHandler.blizzard.effectDimensions;
+        if (dims == null || dims.length == 0) return true;
+        for (int id : dims) {
+            if (id == dimensionId) return true;
+        }
+        return false;
     }
 
 }
