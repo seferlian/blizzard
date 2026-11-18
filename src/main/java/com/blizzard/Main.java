@@ -7,10 +7,10 @@ import com.blizzard.client.BlizzardColdHud;
 import com.blizzard.client.BlizzardShader;
 import com.blizzard.client.BlizzardSoundHandler;
 import com.blizzard.command.CommandWeatherExtended;
-import com.blizzard.raycast.BlizzardClientExposure;
 import com.blizzard.registry.BlizzardCapabilities;
 import com.blizzard.weather.BlizzardManager;
 import com.blizzard.weather.BlizzardPlayerHandler;
+import com.blizzard.weather.SnowWorldGenerator;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.SoundEvent;
 import net.minecraftforge.common.MinecraftForge;
@@ -22,6 +22,7 @@ import net.minecraftforge.fml.common.event.FMLInitializationEvent;
 import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
 import net.minecraftforge.fml.common.event.FMLServerStartingEvent;
 import net.minecraftforge.fml.common.registry.ForgeRegistries;
+import net.minecraftforge.fml.common.registry.GameRegistry;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -48,6 +49,7 @@ public class Main {
     public void init(FMLInitializationEvent event) {
         BlizzardManager.initNetwork();
         MinecraftForge.EVENT_BUS.register(new BlizzardPlayerHandler());
+        GameRegistry.registerWorldGenerator(new SnowWorldGenerator(), 100);
 
         // Capability-хуки (общие)
         MinecraftForge.EVENT_BUS.register(new BlizzardCapabilityHandler());

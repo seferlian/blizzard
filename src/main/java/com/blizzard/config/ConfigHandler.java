@@ -256,6 +256,51 @@ public class ConfigHandler {
         public int snowFallCycle = 20;
     }
 
+
+
+
+    @Config.Name("Снег (Snow)")
+    @Config.Comment("Настройки генерации снежного покрова при прогрузке чанков")
+    public static final Snow snow = new Snow();
+
+    public static class Snow {
+
+        @Config.Name("Включить первичное заполнение снегом")
+        @Config.Comment({
+                "Если true — при прогрузке чанка поверхность покрывается снежными слоями.",
+                "Работает один раз на чанк (эвристика: если на поверхности уже есть снег — чанк пропускается).",
+                "По умолчанию: false"
+        })
+        public boolean fillOnChunkLoad = false;
+
+        @Config.Name("Измерения для заполнения снегом")
+        @Config.Comment({
+                "ID измерений, в которых выполняется первичное заполнение снегом при прогрузке чанков.",
+                "0 = Overworld, -1 = Nether, 1 = End. Модовые — их ID.",
+                "Пустой список = нигде не заполняется.",
+                "По умолчанию: [0] (только Overworld)."
+        })
+        public int[] fillDimensions = new int[] { 0 };
+
+        @Config.Name("Высота слоя (мин)")
+        @Config.Comment("Минимальная высота снежного слоя (layers 1..8). По умолчанию: 1")
+        @Config.RangeInt(min = 1, max = 8)
+        public int fillMinLayers = 1;
+
+        @Config.Name("Высота слоя (макс)")
+        @Config.Comment("Максимальная высота снежного слоя. По умолчанию: 2")
+        @Config.RangeInt(min = 1, max = 8)
+        public int fillMaxLayers = 2;
+
+        @Config.Name("Максимальная высота Y для заполнения")
+        @Config.Comment({
+                "Снег не кладётся выше этого Y (например, чтобы не засыпать горы).",
+                "По умолчанию: 256 (без ограничения)."
+        })
+        @Config.RangeInt(min = 0, max = 256)
+        public int fillMaxY = 256;
+    }
+
     @Mod.EventBusSubscriber(modid = Tags.MODID)
     public static class EventHandler {
         @SubscribeEvent
