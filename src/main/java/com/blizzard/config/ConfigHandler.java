@@ -299,6 +299,10 @@ public class ConfigHandler {
         })
         @Config.RangeInt(min = 0, max = 256)
         public int fillMaxY = 256;
+
+        @Config.Comment("Максимальная глубина от heightmap, на которой ещё ставится снег (в пещерах у поверхности). 0 — только сама поверхность.")
+        @Config.RangeInt(min = 0, max = 64)
+        public int fillCaveDepth = 8;
     }
 
     @Mod.EventBusSubscriber(modid = Tags.MODID)
