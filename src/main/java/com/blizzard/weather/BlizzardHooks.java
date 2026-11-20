@@ -358,6 +358,8 @@ public class BlizzardHooks {
                         entry.lastSentTick = now;
                     }
                 }
+
+                BlizzardSnowAccumulator.tick(ws, current);
             }
             return;
         }
