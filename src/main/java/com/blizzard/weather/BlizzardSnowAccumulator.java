@@ -667,10 +667,15 @@ public final class BlizzardSnowAccumulator {
     }
 
     private static void setSnow(World world, int x, int y, int z, int layers) {
+        int l = Math.max(1, Math.min(MAX_LAYERS_PER_BLOCK, layers));
+        if (l >= MAX_LAYERS_PER_BLOCK) {
+            // Набралось 8 слоёв — подменяем снежный слой целым блоком snow.
+            setSnowBlock(world, x, y, z);
+            return;
+        }
         world.setBlockState(new BlockPos(x, y, z),
                 Blocks.SNOW_LAYER.getDefaultState()
-                        .withProperty(BlockSnow.LAYERS,
-                                Math.max(1, Math.min(MAX_LAYERS_PER_BLOCK, layers))),
+                        .withProperty(BlockSnow.LAYERS, l),
                 SET_FLAG_NO_UPDATE);
     }
 

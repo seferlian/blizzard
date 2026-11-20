@@ -2,6 +2,7 @@ package com.blizzard.weather;
 
 import com.blizzard.network.client.ClientPacketHandlerCold;
 import com.blizzard.network.client.PacketBlizzard;
+import com.blizzard.network.client.VisualSyncPacket;
 import net.minecraftforge.fml.common.network.NetworkRegistry;
 import net.minecraftforge.fml.common.network.simpleimpl.SimpleNetworkWrapper;
 import net.minecraftforge.fml.relauncher.Side;
@@ -49,6 +50,15 @@ public class BlizzardManager {
                 ClientPacketHandlerCold.class,
                 ClientPacketHandlerCold.Packet.class,
                 1,
+                Side.CLIENT
+        );
+
+
+        // Визуал: сервер -> клиент
+        NETWORK.registerMessage(
+                VisualSyncPacket.Handler.class,
+                VisualSyncPacket.class,
+                2,
                 Side.CLIENT
         );
 

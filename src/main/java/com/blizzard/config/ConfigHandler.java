@@ -27,7 +27,9 @@ public class ConfigHandler {
     public static final Blizzard blizzard = new Blizzard();
 
     @Config.Name("Визуал (Visual)")
-    @Config.Comment("Туман, небо и снежинки")
+    @Config.Comment("Туман, небо и снежинки. Внимание! Это клиентские настройки. В моде\n" +
+            "их устанавливает сервер принудительно. Для того, чтобы настройки применились\n" +
+            "для всех игроков на лету, используйте команду /blizzard reload")
     public static final Visual visual = new Visual();
 
     @Config.Name("Снег (Snow)")

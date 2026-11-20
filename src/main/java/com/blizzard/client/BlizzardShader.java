@@ -1,5 +1,6 @@
 package com.blizzard.client;
 
+import com.blizzard.config.ClientVisualConfig;
 import com.blizzard.config.ConfigHandler;
 import com.blizzard.raycast.BlizzardClientExposure;
 import com.blizzard.weather.BlizzardReflection;
@@ -83,11 +84,11 @@ public class BlizzardShader {
 
     // ====== Настройки визуала ======
 
-    private static float getFogShelterFloor() { return (float) ConfigHandler.visual.fogShelterFloor; }
-    private static float getFogStartMin() { return (float) ConfigHandler.visual.fogStartMin; }
-    private static float getFogStartMax() { return (float) ConfigHandler.visual.fogStartMax; }
-    private static float getFogEndMin() { return (float) ConfigHandler.visual.fogEndMin; }
-    private static float getFogEndMax() { return (float) ConfigHandler.visual.fogEndMax; }
+    private static float getFogShelterFloor() { return (float) ClientVisualConfig.getFogShelterFloor(); }
+    private static float getFogStartMin() { return (float) ClientVisualConfig.getFogStartMin(); }
+    private static float getFogStartMax() { return (float) ClientVisualConfig.getFogStartMax(); }
+    private static float getFogEndMin() { return (float) ClientVisualConfig.getFogEndMin(); }
+    private static float getFogEndMax() { return (float) ClientVisualConfig.getFogEndMax(); }
 
     /** Атлас снежинок 2×2 (4 варианта). */
     private static final ResourceLocation SNOWFLAKES_ATLAS =
@@ -238,12 +239,12 @@ public class BlizzardShader {
         if (entity == null) return;
 
         // ====== Параметры рендера ======
-        final int radius = ConfigHandler.visual.snowRadius;
-        final int quadsPerChunk = Math.max(1, (int)(ConfigHandler.visual.snowQuadsPerBlock * blizzardStrength));
-        final float halfSize = (float)ConfigHandler.visual.snowSize * blizzardStrength;
+        final int radius = ClientVisualConfig.getSnowRadius();
+        final int quadsPerChunk = Math.max(1, (int)(ClientVisualConfig.getSnowQuadsPerBlock() * blizzardStrength));
+        final float halfSize = (float)ClientVisualConfig.getSnowSize() * blizzardStrength;
         final float alpha = blizzardStrength;
-        final int fallCycle = ConfigHandler.visual.snowFallCycle;
-        final double windMultiplier = ConfigHandler.visual.snowWindMultiplier;
+        final int fallCycle = ClientVisualConfig.getSnowFallCycle();
+        final double windMultiplier = ClientVisualConfig.getSnowWindMultiplier();
         final double tileSize = 0.5;
 
         // Цвет снежинок = цвет тумана, но чуть светлее (на 10%)
@@ -578,7 +579,7 @@ public class BlizzardShader {
 
         setUniform1f(shaderProgram, "fogStart", dynamicFogStart);
         setUniform1f(shaderProgram, "fogEnd", dynamicFogEnd);
-        setUniform1f(shaderProgram, "fogCurve", (float) ConfigHandler.visual.fogCurve);
+        setUniform1f(shaderProgram, "fogCurve", (float) ClientVisualConfig.getFogCurve());
         setUniform1f(shaderProgram, "blizzardStrength", blizzardStrength);
 
         // ===== Цвет тумана и неба с учётом времени суток =====
@@ -596,8 +597,8 @@ public class BlizzardShader {
 
         setUniform1f(shaderProgram, "projNear", projNear);
         setUniform1f(shaderProgram, "projFar", projFar);
-        setUniform1f(shaderProgram, "skyInterpEnd", (float) ConfigHandler.visual.skyInterpEnd);
-        setUniform1f(shaderProgram, "skyInterpCurve", (float) ConfigHandler.visual.skyInterpCurve);
+        setUniform1f(shaderProgram, "skyInterpEnd", (float) ClientVisualConfig.getSkyInterpEnd());
+        setUniform1f(shaderProgram, "skyInterpCurve", (float) ClientVisualConfig.getSkyInterpCurve());
 
         Tessellator tess = Tessellator.getInstance();
         BufferBuilder buf = tess.getBuffer();
@@ -690,19 +691,19 @@ public class BlizzardShader {
 
         // Десатурация (skyDesaturate)
         float gray = 0.299f * r + 0.587f * g + 0.114f * b;
-        float desat = (float) ConfigHandler.visual.skyDesaturate * dayFactor;
+        float desat = (float) ClientVisualConfig.getSkyDesaturate() * dayFactor;
         r = r + (gray - r) * desat;
         g = g + (gray - g) * desat;
         b = b + (gray - b) * desat;
 
         // Серость (skyGray)
-        float grayShift = (float) ConfigHandler.visual.skyGray * dayFactor;
+        float grayShift = (float) ClientVisualConfig.getSkyGray() * dayFactor;
         r = r + (0.5f - r) * grayShift;
         g = g + (0.5f - g) * grayShift;
         b = b + (0.5f - b) * grayShift;
 
         // Осветление (skyWhiten)
-        float whiten = (float) ConfigHandler.visual.skyWhiten * dayFactor;
+        float whiten = (float) ClientVisualConfig.getSkyWhiten() * dayFactor;
         r = r + (1.0f - r) * whiten;
         g = g + (1.0f - g) * whiten;
         b = b + (1.0f - b) * whiten;

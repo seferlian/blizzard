@@ -6,6 +6,7 @@ import com.blizzard.client.BlizzardClientCold;
 import com.blizzard.client.BlizzardColdHud;
 import com.blizzard.client.BlizzardShader;
 import com.blizzard.client.BlizzardSoundHandler;
+import com.blizzard.command.CommandBlizzard;
 import com.blizzard.command.CommandWeatherExtended;
 import com.blizzard.registry.BlizzardCapabilities;
 import com.blizzard.weather.BlizzardManager;
@@ -69,5 +70,6 @@ public class Main {
     @EventHandler
     public void serverStarting(FMLServerStartingEvent event) {
         event.registerServerCommand(new CommandWeatherExtended());
+        event.registerServerCommand(new CommandBlizzard());
     }
 }
