@@ -103,6 +103,11 @@ public class BlizzardClassTransformer implements IClassTransformer {
                 return patchIrisFinalPass(basicClass);
             }
 
+            // ВАЖНО: хук в World.setBlockState здесь не делаем.
+            // Патч самого setBlockState — это горячий путь (каждая установка блока в мире)
+            // и он ломает семантику возвращаемого значения (true = блок реально установлен),
+            // из-за чего ломаются вёдра, жидкости и WorldGen. Вода замораживается
+            // в SnowIcePopulator при генерации чанка (PopulateChunkEvent.Post).
 
         } catch (Throwable t) {
             System.err.println("[Blizzard ASM] !!! EXCEPTION while patching " + transformedName);
@@ -110,6 +115,9 @@ public class BlizzardClassTransformer implements IClassTransformer {
         }
         return basicClass;
     }
+
+
+
 
     private byte[] patchIrisFinalPass(byte[] basicClass) {
         ClassNode cn = new ClassNode();

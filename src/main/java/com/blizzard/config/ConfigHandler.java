@@ -264,45 +264,60 @@ public class ConfigHandler {
     public static final Snow snow = new Snow();
 
     public static class Snow {
+        @Config.Comment("Заполнять снегом чанки при загрузке.")
+        public boolean fillOnChunkLoad = true;
 
-        @Config.Name("Включить первичное заполнение снегом")
-        @Config.Comment({
-                "Если true — при прогрузке чанка поверхность покрывается снежными слоями.",
-                "Работает один раз на чанк (эвристика: если на поверхности уже есть снег — чанк пропускается).",
-                "По умолчанию: false"
-        })
-        public boolean fillOnChunkLoad = false;
+        @Config.Comment("ID измерений, в которых работает заполнение.")
+        public int[] fillDimensions = {0};
 
-        @Config.Name("Измерения для заполнения снегом")
-        @Config.Comment({
-                "ID измерений, в которых выполняется первичное заполнение снегом при прогрузке чанков.",
-                "0 = Overworld, -1 = Nether, 1 = End. Модовые — их ID.",
-                "Пустой список = нигде не заполняется.",
-                "По умолчанию: [0] (только Overworld)."
-        })
-        public int[] fillDimensions = new int[] { 0 };
-
-        @Config.Name("Высота слоя (мин)")
-        @Config.Comment("Минимальная высота снежного слоя (layers 1..8). По умолчанию: 1")
+        @Config.Comment("Минимальное количество слоёв снега.")
         @Config.RangeInt(min = 1, max = 8)
         public int fillMinLayers = 1;
 
-        @Config.Name("Высота слоя (макс)")
-        @Config.Comment("Максимальная высота снежного слоя. По умолчанию: 2")
+        @Config.Comment("Максимальное количество слоёв снега.")
         @Config.RangeInt(min = 1, max = 8)
-        public int fillMaxLayers = 2;
+        public int fillMaxLayers = 3;
 
-        @Config.Name("Максимальная высота Y для заполнения")
+        @Config.Comment("Максимальная высота, на которой ставится снег.")
+        @Config.RangeInt(min = 0, max = 255)
+        public int fillMaxY = 255;
+
         @Config.Comment({
-                "Снег не кладётся выше этого Y (например, чтобы не засыпать горы).",
-                "По умолчанию: 256 (без ограничения)."
+                "Максимальная глубина от heightmap, на которой ещё ставится снег",
+                "и замораживается вода (озёра/лужи в пещерах).",
+                "0 — только сама поверхность (пещеры/гроты без снега и льда).",
+                "8 — пещеры у поверхности (по умолчанию).",
+                "Листва не считается поверхностью: под кроной снег и лёд ставятся",
+                "независимо от высоты дерева и толщины листвы.",
+                "Больше 64 не бывает: глубже скан колонки не идёт."
         })
-        @Config.RangeInt(min = 0, max = 256)
-        public int fillMaxY = 256;
-
-        @Config.Comment("Максимальная глубина от heightmap, на которой ещё ставится снег (в пещерах у поверхности). 0 — только сама поверхность.")
         @Config.RangeInt(min = 0, max = 64)
         public int fillCaveDepth = 8;
+
+        @Config.Comment("Замораживать воду в лёд при генерации чанка.")
+        public boolean freezeWater = true;
+
+        @Config.Comment({
+                "Сколько блоков воды вниз от поверхности замораживать.",
+                "1 — только верхний слой (корочка льда).",
+                "3 — верхние 3 блока (толстый лёд).",
+                "0 — не замораживать."
+        })
+        @Config.RangeInt(min = 0, max = 16)
+        public int freezeWaterLayers = 1;
+
+        @Config.Comment({
+                "Замораживать только источники (true) или и текущую воду тоже (false).",
+                "Для рек/океанов рекомендуется true."
+        })
+        public boolean freezeOnlySourceBlocks = true;
+
+        @Config.Comment({
+                "Класть снежный слой поверх льда (и замороженной воды, и природного).",
+                "false — лёд остаётся видимым (по умолчанию),",
+                "true — лёд тоже засыпается снегом."
+        })
+        public boolean snowOnIce = false;
     }
 
     @Mod.EventBusSubscriber(modid = Tags.MODID)

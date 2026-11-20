@@ -10,7 +10,7 @@ import com.blizzard.command.CommandWeatherExtended;
 import com.blizzard.registry.BlizzardCapabilities;
 import com.blizzard.weather.BlizzardManager;
 import com.blizzard.weather.BlizzardPlayerHandler;
-import com.blizzard.weather.SnowWorldGenerator;
+import com.blizzard.weather.SnowIcePopulator;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.SoundEvent;
 import net.minecraftforge.common.MinecraftForge;
@@ -49,7 +49,7 @@ public class Main {
     public void init(FMLInitializationEvent event) {
         BlizzardManager.initNetwork();
         MinecraftForge.EVENT_BUS.register(new BlizzardPlayerHandler());
-        GameRegistry.registerWorldGenerator(new SnowWorldGenerator(), 100);
+        MinecraftForge.EVENT_BUS.register(new SnowIcePopulator());
 
         // Capability-хуки (общие)
         MinecraftForge.EVENT_BUS.register(new BlizzardCapabilityHandler());

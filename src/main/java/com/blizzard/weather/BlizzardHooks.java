@@ -573,6 +573,9 @@ public class BlizzardHooks {
 
 
 
+
+
+
     public static void clearDebugFor(java.util.UUID id) {
         LAST_DEBUG.remove(id);
     }
