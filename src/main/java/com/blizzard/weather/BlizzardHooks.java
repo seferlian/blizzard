@@ -461,7 +461,7 @@ public class BlizzardHooks {
         LAST_RAINING.put(world, false);
         LAST_THUNDERING.put(world, false);
 
-        System.out.println("[Blizzard] Storm started (" + reason + "): " + duration + " ticks.");
+        //System.out.println("[Blizzard] Storm started (" + reason + "): " + duration + " ticks.");
     }
 
 
@@ -509,8 +509,8 @@ public class BlizzardHooks {
                         BlizzardReflection.setBlizzardStrength(world, infoStrength);
                         BlizzardReflection.setPrevBlizzardStrength(world, infoStrength);
 
-                        System.out.println("[Blizzard] Restored World from WorldInfo: "
-                                + infoTime + " ticks, strength " + infoStrength);
+                        /*System.out.println("[Blizzard] Restored World from WorldInfo: "
+                                + infoTime + " ticks, strength " + infoStrength);*/
                     }
 
                     // Инициализируем LAST_* по текущему состоянию
@@ -601,13 +601,13 @@ public class BlizzardHooks {
                     java.lang.reflect.Method getTextureId = noTranslucents.getClass().getMethod("getTextureId");
                     depthTexId = (int) getTextureId.invoke(noTranslucents);
                 } catch (NoSuchMethodException e) {
-                    System.out.println("[Blizzard] DepthTexture has no getTextureId() method");
+                    //System.out.println("[Blizzard] DepthTexture has no getTextureId() method");
                 }
             } else {
-                System.out.println("[Blizzard] getDepthTextureNoTranslucents() returned null");
+                //System.out.println("[Blizzard] getDepthTextureNoTranslucents() returned null");
             }
         } catch (Throwable t) {
-            System.out.println("[Blizzard] Failed to get depth texture: " + t.getMessage());
+            //System.out.println("[Blizzard] Failed to get depth texture: " + t.getMessage());
             t.printStackTrace();
         }
 
