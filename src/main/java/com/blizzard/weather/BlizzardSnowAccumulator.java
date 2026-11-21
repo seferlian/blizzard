@@ -140,6 +140,13 @@ public final class BlizzardSnowAccumulator {
     private static final int NO_VALUE = Integer.MIN_VALUE;
 
     /**
+     * Насколько глубоко под клеткой-мостом ищем твёрдую опору, если прямо под
+     * ней воздух. 3 блока — компромисс: закрывает нависающие края сугробов над
+     * небольшими выступами, но не строит «парящих» мостов над пропастями.
+     */
+    private static final int BRIDGE_SUPPORT_DEPTH = 3;
+
+    /**
      * Максимум «зон» за тик (зона — один или несколько стоящих рядом игроков).
      * Нужен только для статических массивов ниже, поэтому с запасом.
      */
@@ -360,26 +367,120 @@ public final class BlizzardSnowAccumulator {
 
         int baseY = columnBase(chunk, x, z);
         if (baseY == COL_DRIFT) {
-            // Над неполной опорой (тропинка, плита, забор, лестница, стена, цветок)
-            // пусто: обычного роста тут нет — только занос ЦЕЛОГО блока сверху,
-            // если сбоку уже лежит полный снег. В пустую клетку над воздухом не ставим.
             tryDriftOverObstacle(world, chunk, x, z, t, maxY, cfg);
             return;
         }
         if (baseY == COL_BLOCKED) {
-            // Препятствие стоит прямо в основании (heightmap его не учитывает) и
-            // снега над ним ещё нет: кладём целый блок снега прямо на него.
             tryDriftOverObstacle(world, chunk, x, z, t, maxY, cfg);
             return;
         }
-        if (baseY == COL_BOUNDARY) return;   // вода/воздух под колонкой: снег тут не держится
+        if (baseY == COL_BOUNDARY) {
+            // Пункт 3: мост над льдом/водой, если с 3+ сторон уже лежит полный снег.
+            tryBridge(world, chunk, x, z, maxY, cfg);
+            return;
+        }
 
         int cur = countLayers(chunk, x, z, baseY, maxY);
-
-        // Обычная релаксация: ровно один слой за касание, если позволяют цель и
-        // соседи. Всё, что не выросло, просто ждёт следующих касаний — над снегом
-        // ничего не «перекидывается» и целые блоки не ставятся.
         growColumn(world, chunk, x, z, baseY, cur, t, maxY, cfg);
+    }
+
+
+    /**
+     * Если наша клетка — воздух, а с 3+ боковых сторон уже лежит полный
+     * 8-слойный снег, ставим целый блок minecraft:snow в эту клетку.
+     *
+     * Поддерживаемые основания:
+     *  - лёд (замёрзшая вода) — обычный случай;
+     *  - твёрдый полный блок, если он есть прямо под клеткой (нависающий край
+     *    сугроба над выступом скалы/земли);
+     *  - воздух — ТОЛЬКО если в пределах BRIDGE_SUPPORT_DEPTH под клеткой есть
+     *    твёрдая опора (полный непрозрачный блок). Иначе блок снега повис бы
+     *    в воздухе, а это некрасиво и потенциально опасно при внешних
+     *    обновлениях блоков.
+     *
+     * Над открытой водой (не льдом) мост НЕ ставим: ванильный BlockSnow на воде
+     * не держится, а лёд под ним ещё не образовался — блок повис бы.
+     *
+     * Блок не поднимает общую высоту: columnBase() в дальнейшем вернёт эту
+     * клетку как baseY, и growColumn() дорастит колонку до той же целевой t,
+     * что и соседи (мост съедает ровно один блок из целевой высоты).
+     */
+    private static void tryBridge(World world, Chunk chunk, int x, int z, int maxY,
+                                  ConfigHandler.Accumulation cfg) {
+        int height = chunk.getHeightValue(x & 15, z & 15);
+        if (height <= 0) return;
+
+        int baseY = snowBaseY(chunk, x, z, height);
+        if (baseY <= 0) return;
+
+        // Клетка, куда ставим мост, должна быть пустой.
+        MUT.setPos(x, baseY, z);
+        IBlockState at = chunk.getBlockState(MUT);
+        if (at.getBlock() != Blocks.AIR && !isReplaceablePlant(at)) return;
+
+        MUT.setPos(x, baseY - 1, z);
+        IBlockState below = chunk.getBlockState(MUT);
+
+        boolean okBase;
+        if (isIce(below)) {
+            // Лёд — идеальная опора: блок снега ляжет и не осыпется.
+            okBase = true;
+        } else if (isSnowSupport(below)) {
+            // Полный непрозрачный блок прямо под клеткой (выступ скалы/земли).
+            okBase = true;
+        } else if (below.getBlock() == Blocks.AIR) {
+            // Воздух под клеткой: разрешаем, только если в пределах
+            // BRIDGE_SUPPORT_DEPTH есть твёрдая опора — иначе блок повиснет.
+            okBase = hasSolidWithin(chunk, x, baseY - 1, z, BRIDGE_SUPPORT_DEPTH);
+        } else {
+            // Открытая вода, листва, стволы и прочее — не наш случай.
+            okBase = false;
+        }
+        if (!okBase) return;
+
+        int snowSides = 0;
+        if (hasFullSnowAt(world, x - 1, z, baseY, maxY)) snowSides++;
+        if (hasFullSnowAt(world, x + 1, z, baseY, maxY)) snowSides++;
+        if (hasFullSnowAt(world, x, z - 1, baseY, maxY)) snowSides++;
+        if (hasFullSnowAt(world, x, z + 1, baseY, maxY)) snowSides++;
+        if (snowSides < 3) return;
+
+        if (cfg.growChance < 1.0 && RANDOM.nextDouble() >= cfg.growChance) return;
+
+        setSnowBlock(world, x, baseY, z);
+    }
+
+    private static boolean hasFullSnowAt(World world, int x, int z, int y, int maxY) {
+        Chunk chunk = getLoadedChunk(world, x, z);
+        if (chunk == null) return false;
+
+        MUT.setPos(x, y, z);
+        IBlockState state = chunk.getBlockState(MUT);
+        if (state.getBlock() == Blocks.SNOW) return true;
+        if (state.getBlock() == Blocks.SNOW_LAYER) {
+            return state.getValue(BlockSnow.LAYERS) >= MAX_LAYERS_PER_BLOCK;
+        }
+        return false;
+    }
+
+    /**
+     * Есть ли в колонке (x, z) начиная с yFrom вниз в пределах depth твёрдая
+     * опора — полный непрозрачный блок (isSnowSupport). Используется только
+     * tryBridge, чтобы не ставить парящий снег над пустотой.
+     */
+    private static boolean hasSolidWithin(Chunk chunk, int x, int yFrom, int z, int depth) {
+        int yTo = Math.max(0, yFrom - depth + 1);
+        for (int y = yFrom; y >= yTo; y--) {
+            MUT.setPos(x, y, z);
+            IBlockState s = chunk.getBlockState(MUT);
+            if (isSnowSupport(s)) return true;
+            // Встретили воду/листву/ствол — это не «твёрдая опора», прекращаем.
+            Block b = s.getBlock();
+            if (b == Blocks.AIR) continue;
+            if (isLeaf(s) || b == Blocks.LOG || b == Blocks.LOG2) return false;
+            if (isWater(s)) return false;
+        }
+        return false;
     }
 
     /**
@@ -388,42 +489,41 @@ public final class BlizzardSnowAccumulator {
      */
     private static void growColumn(World world, Chunk chunk, int x, int z, int baseY, int cur,
                                    int t, int maxY, ConfigHandler.Accumulation cfg) {
+        // Пункт 2: занос на препятствие (забор, плита, факел, тропинка) поднимает
+        // основание колонки на 1 блок выше, чем у обычной земли. Чтобы итоговая
+        // ВЕРХНЯЯ КРОМКА сугроба совпадала с соседями, уменьшаем цель на 8 слоёв.
+        // Для мостов над льдом/водой этого не делаем — там основание не смещено.
+        MUT.setPos(x, baseY - 1, z);
+        IBlockState below = chunk.getBlockState(MUT);
+        if (isDriftTarget(below) && !isSnowSupport(below)) {
+            t -= MAX_LAYERS_PER_BLOCK;
+        }
+
         int reachable = (maxY - baseY + 1) * MAX_LAYERS_PER_BLOCK;
         if (reachable < 0) reachable = 0;
         if (t > reachable) t = reachable;
         if (t < 0) t = 0;
 
-        // Цель уже достигнута — соседей (самое дорогое чтение) не трогаем вовсе.
         if (cur >= t) return;
 
         int d = Math.max(1, cfg.maxNeighborDiff);
         int minNb = Integer.MAX_VALUE;
 
         minNb = lower(minNb, neighborValue(world, x - 1, z, maxY));
-        if (minNb <= cur - d) return;   // даже если остальные соседи выше — роста не будет
+        if (minNb <= cur - d) return;
         minNb = lower(minNb, neighborValue(world, x + 1, z, maxY));
         if (minNb <= cur - d) return;
         minNb = lower(minNb, neighborValue(world, x, z - 1, maxY));
         if (minNb <= cur - d) return;
         minNb = lower(minNb, neighborValue(world, x, z + 1, maxY));
 
-        // cap = min(t, min_соседей + d): цель и d-липшицево ограничение.
         int cap = (minNb == Integer.MAX_VALUE) ? t : Math.min(t, minNb + d);
         if (cap < 0) cap = 0;
 
-        // Снег только НАКАПЛИВАЕТСЯ: если расти уже некуда — просто ничего не делаем.
-        // Никакого срезания излишков, растапливания или чистки колонок нет.
         if (cap <= cur) return;
-
-        // Шанс роста: снежинка «падает» не в каждую попытку, поэтому снег идёт
-        // неровно — где-то уже сугроб, а рядом ещё только первый слой.
         if (cfg.growChance < 1.0 && RANDOM.nextDouble() >= cfg.growChance) return;
 
-        // Рост ровно на один слой (1/8 блока) за касание: снежинка за снежинкой.
-        // Шаг не зависит от разрыва до цели, поэтому рельеф проявляется
-        // постепенно и одинаково, в каком бы порядке ни выбирались колонки.
         int next = Math.min(cap, cur + LAYERS_PER_TOUCH);
-
         applyStack(world, chunk, x, z, baseY, next, maxY);
     }
 
@@ -522,13 +622,22 @@ public final class BlizzardSnowAccumulator {
      * них не работал вовсе.
      */
     private static boolean neighborDriftsBeside(World world, int x, int z, int y, int maxY) {
-        Chunk chunk = getLoadedChunk(world, x, z);      // сосед почти всегда в кэше
+        Chunk chunk = getLoadedChunk(world, x, z);
         if (chunk == null) return false;
 
-        int b = columnBase(chunk, x, z);
-        if (b <= 0 || b > y) return false;              // снега нет или он начинается выше клетки
+        // Пункт 1: если у соседа ровно на уровне y уже лежит полный 8-слойный снег,
+        // считаем условие выполненным. Это помогает заборам/проводам, у которых
+        // верхняя кромка сугроба может совпадать с целевой клеткой, даже если
+        // «снизу доверху» колонка забита не полностью.
+        MUT.setPos(x, y, z);
+        IBlockState atY = chunk.getBlockState(MUT);
+        if (atY.getBlock() == Blocks.SNOW) return true;
+        if (atY.getBlock() == Blocks.SNOW_LAYER
+                && atY.getValue(BlockSnow.LAYERS) >= MAX_LAYERS_PER_BLOCK) return true;
 
-        // Сколько слоёв нужно соседу, чтобы заполнить клетку y целиком.
+        int b = columnBase(chunk, x, z);
+        if (b <= 0 || b > y) return false;
+
         int need = (y + 1 - b) * MAX_LAYERS_PER_BLOCK;
         return countLayers(chunk, x, z, b, maxY) >= need;
     }
@@ -579,30 +688,29 @@ public final class BlizzardSnowAccumulator {
         boolean snowHere = isSnow(at);
         boolean free = at.getBlock() == Blocks.AIR || snowHere || isReplaceablePlant(at);
         if (!free) {
-            // ЗАНОС НА ПРЕПЯТСТВИЕ: если снег уже наметён ПОВЕРХ препятствия
-            // (факел, плита, забор, цветок), то основание колонки — этот снег.
-            // Ванильный BlockSnow такую опору не признаёт, но блок поставлен с
-            // флагом 2 (см. tryDriftOverObstacle) и не осыпается, поэтому рост
-            // продолжается обычным порядком — от первого блока над препятствием.
+            // Пункт 1: модовые провода и т.п. могут быть полными непрозрачными
+            // блоками (isSnowSupport == true), но не попадать в heightmap из-за
+            // getLightOpacity()==0. Тогда baseY указывает на сам блок, и снег
+            // должен начинаться на клетку выше.
+            if (isSnowSupport(at)) return baseY + 1;
+
+            // Занос уже стоит поверх препятствия — считаем этот снег основанием.
             if (baseY + 1 <= WORLD_TOP_Y) {
                 MUT.setPos(x, baseY + 1, z);
                 if (isSnow(chunk.getBlockState(MUT))) return baseY + 1;
             }
-            return COL_BLOCKED;               // ствол / чужой твёрдый блок без снега сверху
+            return COL_BLOCKED;
         }
 
-        // Обычная опора — полный непрозрачный блок.
         if (isSnowSupport(below)) return baseY;
 
-        // Неполная опора (факел, плита, забор, цветок). Если снег на ней уже
-        // лежит — это блок, наметённый заносом: колонка живёт как обычная и
-        // растёт от него дальше. Если снега ещё нет — это только КАНДИДАТ на
-        // занос: сами в пустую клетку над препятствием ничего не ставим (в том
-        // числе не наращиваем снег над воздухом), это делает tryDriftOverObstacle
-        // и только при готовом сугробе сбоку.
         if (isDriftTarget(below)) return snowHere ? baseY : COL_DRIFT;
 
-        return COL_BOUNDARY;                  // вода / лёд / воздух под колонкой
+        // Пункт 3: снег, поставленный tryBridge над льдом/водой, тоже является
+        // основанием обычной колонки и должен расти дальше как у соседей.
+        if ((isIce(below) || isWater(below)) && snowHere) return baseY;
+
+        return COL_BOUNDARY;
     }
 
     /** Слоёв снега над baseY: слой даёт 1..8, целый блок minecraft:snow — ровно 8. */
