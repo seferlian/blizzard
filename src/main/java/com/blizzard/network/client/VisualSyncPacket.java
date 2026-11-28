@@ -1,14 +1,12 @@
 package com.blizzard.network.client;
 
-import com.blizzard.config.ClientVisualConfig;
 import com.blizzard.config.ConfigHandler;
+import com.blizzard.network.IBlizzardClientHandler;
+import com.blizzard.weather.BlizzardManager;
 import io.netty.buffer.ByteBuf;
-import net.minecraft.client.Minecraft;
 import net.minecraftforge.fml.common.network.simpleimpl.IMessage;
 import net.minecraftforge.fml.common.network.simpleimpl.IMessageHandler;
 import net.minecraftforge.fml.common.network.simpleimpl.MessageContext;
-import net.minecraftforge.fml.relauncher.Side;
-import net.minecraftforge.fml.relauncher.SideOnly;
 
 /**
  * Пакет синхронизации клиентских визуальных настроек с сервера.
@@ -103,15 +101,15 @@ public class VisualSyncPacket implements IMessage {
         buf.writeInt(this.snowFallCycle);
     }
 
-    // ===== Обработчик (клиент) =====
+    // ===== Обработчик =====
     public static class Handler implements IMessageHandler<VisualSyncPacket, IMessage> {
 
         @Override
-        @SideOnly(Side.CLIENT)
         public IMessage onMessage(VisualSyncPacket message, MessageContext ctx) {
-            Minecraft.getMinecraft().addScheduledTask(() ->
-                    ClientVisualConfig.apply(message)
-            );
+            IBlizzardClientHandler packetHandler = BlizzardManager.PACKET_HANDLER;
+            if (packetHandler != null) {
+                packetHandler.handleVisual(message);
+            }
             return null;
         }
     }

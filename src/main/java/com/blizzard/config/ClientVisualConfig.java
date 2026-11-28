@@ -7,7 +7,8 @@ import com.blizzard.network.client.VisualSyncPacket;
  *
  * Пока serverSynced == false — геттеры возвращают локальный ConfigHandler.visual.
  * После приёма пакета — возвращают значения сервера.
- * Флаг сбрасывается при отключении от сервера (см. ClientEventHandler).
+ * Флаг сбрасывается при отключении от сервера
+ * (см. BlizzardClientPacketHandler.onDisconnect).
  *
  */
 public class ClientVisualConfig {

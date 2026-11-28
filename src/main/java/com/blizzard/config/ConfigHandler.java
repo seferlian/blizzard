@@ -15,7 +15,7 @@ import com.blizzard.Tags;
 public class ConfigHandler {
 
     @Config.Name("Холод (Cold)")
-    @Config.Comment("Накопление и убывание холода, защита бронёй, урон в воде")
+    @Config.Comment("Накопление и убывание холода, урон в воде (защиту даёт термопластина)")
     public static final Cold cold = new Cold();
 
     @Config.Name("Тепло (Heat)")
@@ -40,6 +40,10 @@ public class ConfigHandler {
     @Config.Comment("Постепенное накопление снега и замерзание воды во время метели")
     public static final Accumulation accumulation = new Accumulation();
 
+    @Config.Name("Термопластина (Thermoplate)")
+    @Config.Comment("Термочайный пакет: уровни защиты, наковальня и рецепты крафта")
+    public static final Thermoplate thermoplate = new Thermoplate();
+
     public static class Cold {
         @Config.Name("Скорость накопления (за тик)")
         @Config.Comment({
@@ -59,16 +63,6 @@ public class ConfigHandler {
         })
         @Config.RangeDouble(min = 0.0, max = 1.0)
         public double drainPerTick = 1.0 / 1200.0;
-
-        @Config.Name("Замедление от одной детали брони")
-        @Config.Comment({
-                "На какую долю (0.0 - 1.0) каждая надетя деталь брони замедляет накопление холода.",
-                "0.15 = 15% за деталь; 4 детали = 60% замедления.",
-                "0.25 = 25% за деталь; 4 детали = 100% защиты (холод не копится).",
-                "По умолчанию: 0.15"
-        })
-        @Config.RangeDouble(min = 0.0, max = 1.0)
-        public double armorSlotSlowdown = 0.15;
 
         @Config.Name("Множитель накопления холода в воде")
         @Config.Comment({
@@ -93,6 +87,109 @@ public class ConfigHandler {
         })
         @Config.RangeDouble(min = 0.0, max = 1.0)
         public double exposureThreshold = 0.05;
+    }
+
+    /** Настройки термочайного пакета (термопластины). */
+    public static class Thermoplate {
+
+        @Config.Name("Защита по уровням")
+        @Config.Comment({
+                "Доля защиты от холода (0.0 - 1.0) для уровней I..V термочайного пакета.",
+                "По умолчанию: 0.05, 0.10, 0.15, 0.20, 0.25 (5%, 10%, 15%, 20%, 25%).",
+                "Количество элементов задаёт число уровней (не больше 5)."
+        })
+        public double[] levels = { 0.05, 0.10, 0.15, 0.20, 0.25 };
+
+        @Config.Name("Стоимость на наковальне (уровней опыта)")
+        @Config.Comment("Сколько уровней опыта стоит вставить пакет в броню. По умолчанию: 3")
+        @Config.RangeInt(min = 0, max = 40)
+        public int anvilCost = 3;
+
+        @Config.Name("Включить крафт по уровням")
+        @Config.Comment({
+                "Индекс 0 — уровень I, индекс 4 — уровень V.",
+                "false — рецепт этого уровня не регистрируется (крафт убран)."
+        })
+        @Config.RequiresMcRestart
+        public boolean[] recipeEnabled = { true, true, true, true, true };
+
+        @Config.Name("Количество на выходе по уровням")
+        @Config.Comment("Сколько пакетов даёт крафт каждого уровня. По умолчанию: 1")
+        @Config.RequiresMcRestart
+        public int[] recipeOutputCounts = { 1, 1, 1, 1, 1 };
+
+        @Config.Name("Ингредиенты крафта по уровням")
+        @Config.Comment({
+                "Строка 0 — уровень I, строка 4 — уровень V.",
+                "Формат: modid:name или modid:name:meta, ингредиенты через запятую.",
+                "recipeEnabled[i]=false или неизвестный предмет — рецепт уровня не создаётся.",
+                "Изменения рецептов применяются после перезапуска игры."
+        })
+        @Config.RequiresMcRestart
+        public String[] recipeIngredients = {
+                "minecraft:paper,minecraft:paper,minecraft:wool,minecraft:coal",
+                "blizzard:thermo_tea_pack:0,minecraft:paper,minecraft:magma_cream",
+                "blizzard:thermo_tea_pack:1,minecraft:magma_cream,minecraft:blaze_powder",
+                "blizzard:thermo_tea_pack:2,minecraft:blaze_powder,minecraft:diamond",
+                "blizzard:thermo_tea_pack:3,minecraft:blaze_powder,minecraft:diamond,minecraft:gold_ingot"
+        };
+
+        /** @return число уровней (0..5) по длине массива levels. */
+        public int getLevelsCount() {
+            if (levels == null || levels.length == 0) return 0;
+            return Math.min(levels.length, 5);
+        }
+
+        /** @return защита уровня (0.0..1.0); уровень за пределами массива — последний. */
+        public double getLevelProtection(int level) {
+            int count = getLevelsCount();
+            if (count == 0) return 0.0;
+            int index = level < 0 ? 0 : Math.min(level, count - 1);
+            return clamp01(levels[index]);
+        }
+
+        /** @return максимальная защита одного уровня (0.0..1.0). */
+        public double getMaxProtection() {
+            int count = getLevelsCount();
+            double max = 0.0;
+            for (int i = 0; i < count; i++) {
+                max = Math.max(max, clamp01(levels[i]));
+            }
+            return max;
+        }
+
+        /**
+         * Ближайший уровень для произвольного значения защиты.
+         * Нужен команде администратора: пакет с NBT-процентом получает подходящие иконку и имя.
+         */
+        public int getNearestLevel(float protection) {
+            int count = getLevelsCount();
+            if (count == 0) return 0;
+            for (int i = 0; i < count; i++) {
+                if (clamp01(levels[i]) >= protection) return i;
+            }
+            return count - 1;
+        }
+
+        public boolean isRecipeEnabled(int level) {
+            return recipeEnabled != null && level >= 0 && level < recipeEnabled.length && recipeEnabled[level];
+        }
+
+        public int getRecipeOutputCount(int level) {
+            if (recipeOutputCounts == null || level < 0 || level >= recipeOutputCounts.length) return 1;
+            return Math.max(1, recipeOutputCounts[level]);
+        }
+
+        public String getRecipeIngredients(int level) {
+            if (recipeIngredients == null || level < 0 || level >= recipeIngredients.length) return "";
+            return recipeIngredients[level];
+        }
+
+        private static double clamp01(double value) {
+            if (value < 0.0) return 0.0;
+            if (value > 1.0) return 1.0;
+            return value;
+        }
     }
 
     public static class Heat {

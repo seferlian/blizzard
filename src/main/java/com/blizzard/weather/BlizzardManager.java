@@ -1,5 +1,6 @@
 package com.blizzard.weather;
 
+import com.blizzard.network.IBlizzardClientHandler;
 import com.blizzard.network.client.ClientPacketHandlerCold;
 import com.blizzard.network.client.PacketBlizzard;
 import com.blizzard.network.client.VisualSyncPacket;
@@ -25,6 +26,17 @@ public class BlizzardManager {
      */
     public static final SimpleNetworkWrapper NETWORK =
             NetworkRegistry.INSTANCE.newSimpleChannel("blizzard_net");
+
+    /**
+     * Обработчик пакетов на текущей стороне.
+     *
+     * Заполняется в Main.init() из @SidedProxy: на клиенте — реализация,
+     * работающая с net.minecraft.client.*, на сервере — пустая заглушка.
+     * Благодаря этому зарегистрированные IMessageHandler'ы не содержат
+     * клиентских ссылок и FML SideTransformer не падает с
+     * "Attempted to load class ... for invalid side SERVER".
+     */
+    public static IBlizzardClientHandler PACKET_HANDLER = null;
 
     /**
      * Регистрирует обработчики пакетов.

@@ -1,6 +1,7 @@
 package com.blizzard.capabilities;
 
 import com.blizzard.config.ConfigHandler;
+import com.blizzard.item.ThermoPlateData;
 import com.blizzard.damage.BlizzardDamageSource;
 import com.blizzard.raycast.BlizzardExposure;
 import com.blizzard.weather.BlizzardHooks;
@@ -8,7 +9,6 @@ import com.blizzard.weather.BlizzardManager;
 import com.blizzard.weather.BlizzardReflection;
 import com.blizzard.network.client.ClientPacketHandlerCold;
 import net.minecraft.entity.player.EntityPlayerMP;
-import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.world.World;
 import net.minecraft.world.storage.WorldInfo;
@@ -21,7 +21,7 @@ import java.util.concurrent.ThreadLocalRandom;
  * МЕХАНИКА:
  * - Растёт, пока игрок «открыт» метели (exposure > 5%) и метель активна.
  * - Скорость роста задается в количестве за тик (легко переносится в конфиг).
- * - Каждая надетая деталь брони замедляет накопление на заданный процент.
+ * - Термозащиту даёт только термопластина, вставленная в броню (NBT), см. ThermoPlateData.
  * - Медленно убывает, если exposure < 5% или метель закончилась.
  * - cold = 0..1. При 0 шкала в HUD не рисуется.
  * - Сбрасывается после смерти (PlayerEvent.Clone с isWasDeath).
@@ -40,14 +40,6 @@ public class BlizzardColdCapability {
      * 1.0f / 1200.0f = полное заполнение шкалы за 60 секунд (1 минуту).
      */
     private static float getColdGainPerTick() { return (float) ConfigHandler.cold.coldGainPerTick; }
-
-    /**
-     * Насколько снижается скорость накопления за КАЖДУЮ надетую деталь брони.
-     * 0.15f = каждая деталь замедляет накопление на 15%.
-     * Если надеть все 4 детали, замедление будет 60% (скорость упадёт до 40%).
-     * При 0.25f (4 детали = 100%) броня будет давать полную защиту (холод не растёт).
-     */
-    private static float getArmorSlotSlowdown() { return (float) ConfigHandler.cold.armorSlotSlowdown; }
 
     /**
      * Скорость убывания при отсутствии метели (полный сброс за ~60 секунд).
@@ -164,8 +156,7 @@ public class BlizzardColdCapability {
             if (fullStrength && exposure > getExposureThreshold()) {
                 float norm = (exposure - getExposureThreshold()) / (1f - getExposureThreshold());
 
-                int armorPieces = countArmorPieces(player);
-                float armorSlowdown = Math.min(1.0f, armorPieces * getArmorSlotSlowdown());
+                float armorSlowdown = ThermoPlateData.getWornProtection(player);
                 float multiplier = 1.0f - armorSlowdown;
 
                 float heatProtection = BlizzardExposure.getHeatProtection(player);
@@ -191,24 +182,6 @@ public class BlizzardColdCapability {
 
         this.scheduleSync(player);
         this.tick++;
-    }
-
-    /**
-     * Считает количество надетых деталей брони (0..4).
-     * Проверяет только слоты шлема, нагрудника, штанов и ботинок.
-     *
-     * В 1.12.2 слоты брони в инвентаре игрока:
-     * 36 — ботинки, 37 — штаны, 38 — нагрудник, 39 — шлем.
-     */
-    private int countArmorPieces(EntityPlayerMP player) {
-        int count = 0;
-        for (int i = 36; i <= 39; i++) {
-            ItemStack stack = player.inventory.getStackInSlot(i);
-            if (!stack.isEmpty()) {
-                count++;
-            }
-        }
-        return count;
     }
 
     /**

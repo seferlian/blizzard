@@ -1,9 +1,8 @@
 package com.blizzard.network.client;
 
-import com.blizzard.raycast.BlizzardClientExposure;
-import com.blizzard.weather.BlizzardReflection;
+import com.blizzard.network.IBlizzardClientHandler;
+import com.blizzard.weather.BlizzardManager;
 import io.netty.buffer.ByteBuf;
-import net.minecraft.client.Minecraft;
 import net.minecraftforge.fml.common.network.simpleimpl.*;
 
 /**
@@ -103,18 +102,19 @@ public class PacketBlizzard implements IMessage {
     }
 
     /**
-     * Обработчик пакета на стороне клиента.
-     * Применяет полученное состояние метели к клиентскому миру
-     * через BlizzardReflection, а exposure — в BlizzardClientExposure
-     * для интерполяции и сглаживания перед рендером.
+     * Обработчик пакета.
+     *
+     * Регистрируется на обеих сторонах (id пакета нужен серверу для
+     * отправки), поэтому класс не должен содержать ссылок на
+     * net.minecraft.client.* — иначе FML SideTransformer не даст
+     * загрузить его на выделенном сервере. Вся клиентская работа
+     * выполняется в IBlizzardClientHandler, реализация которого
+     * создаётся только на клиенте.
      */
     public static class Handler implements IMessageHandler<PacketBlizzard, IMessage> {
 
         /**
          * Вызывается при получении пакета.
-         * Переключаемся на главный поток клиента (Minecraft требует всех
-         * обращений к mc.world из главного потока), затем применяем
-         * состояние.
          *
          * @param message входящий пакет;
          * @param ctx     контекст обработки.
@@ -122,19 +122,10 @@ public class PacketBlizzard implements IMessage {
          */
         @Override
         public IMessage onMessage(PacketBlizzard message, MessageContext ctx) {
-            // Переключаемся на главный поток клиента — world нельзя менять из сетевого потока
-            Minecraft.getMinecraft().addScheduledTask(() -> {
-                Minecraft mc = Minecraft.getMinecraft();
-                // Проверяем, что мир уже загружен (пакет мог прийти до входа в мир)
-                if (mc.world != null) {
-                    // Устанавливаем флаг активности и остаток времени
-                    BlizzardReflection.setBlizzard(mc.world, message.active, message.duration);
-                    // Устанавливаем визуальную силу для шейдера и снежинок
-                    BlizzardReflection.setBlizzardStrength(mc.world, message.strength);
-                    // Передаём exposure в клиентский калькулятор (интерполяция + EMA)
-                    BlizzardClientExposure.onPacket(message.skyExposure, message.openness);
-                }
-            });
+            IBlizzardClientHandler packetHandler = BlizzardManager.PACKET_HANDLER;
+            if (packetHandler != null) {
+                packetHandler.handleBlizzard(message);
+            }
             return null; // ответ не нужен
         }
     }
